@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SetPasswordScreen extends StatefulWidget {
   final String email;
@@ -48,20 +49,34 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
       _showSnackBar("Passwords do not match.", Colors.red);
       return;
     }
-    
+
     if (widget.email.toLowerCase().contains("admin")) {
-  _showSnackBar("Admins must create their account via the web dashboard.", Colors.red);
-  return;
-}
-
-
+      _showSnackBar("Admins must create their account via the web dashboard.", Colors.red);
+      return;
+    }
 
     try {
-      // 🔥 Create Firebase Auth account here
+      // 🔥 Create Firebase Auth account
       await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: widget.email,
         password: password,
       );
+
+      // 🔥 Update Firestore document
+      final userQuery = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: widget.email)
+          .limit(1)
+          .get();
+
+      if (userQuery.docs.isNotEmpty) {
+        final userDoc = userQuery.docs.first.reference;
+        await userDoc.update({
+          'password': password,
+          'verified': true,
+          'verificationCode': FieldValue.delete(),
+        });
+      }
 
       // 🕒 Show “Setting up account” animation
       showDialog(
@@ -69,15 +84,15 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
         barrierDismissible: false,
         builder: (context) {
           Future.delayed(const Duration(seconds: 3), () {
-            Navigator.pop(context); // close "loading" dialog
+            Navigator.pop(context); // close loading
 
-            // ✅ Success Dialog
+            // ✅ Success dialog
             showDialog(
               context: context,
               barrierDismissible: false,
               builder: (context) {
                 Future.delayed(const Duration(seconds: 2), () {
-                  Navigator.pop(context); // close success dialog
+                  Navigator.pop(context); // close success
                   Navigator.pushReplacementNamed(context, '/login');
                 });
 
@@ -159,7 +174,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 🔙 Back Button
+            // 🔙 Back button
             Padding(
               padding: const EdgeInsets.only(left: 10, top: 10),
               child: InkWell(
@@ -177,7 +192,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
               ),
             ),
 
-            // 📋 Main Content
+            // 📋 Main content
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(20),
