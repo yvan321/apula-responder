@@ -42,100 +42,98 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Future<void> _register() async {
-    final name = _nameController.text.trim();
-    final email = _emailController.text.trim();
-    final contact = _contactController.text.trim();
-    final address = _addressController.text.trim();
+ Future<void> _register() async {
+  final name = _nameController.text.trim();
+  final email = _emailController.text.trim();
+  final contact = _contactController.text.trim();
+  final address = _addressController.text.trim();
 
-    if (email.toLowerCase().contains("admin")) {
-      _showSnackBar("Admin accounts cannot register in the mobile app.", Colors.red);
-      return;
-    }
-
-    if (name.isEmpty || email.isEmpty || contact.isEmpty || address.isEmpty) {
-      _showSnackBar("All fields are required.", Colors.red);
-      return;
-    }
-
-    if (!email.endsWith("@gmail.com")) {
-      _showSnackBar("Email must be a Gmail address.", Colors.red);
-      return;
-    }
-
-    try {
-      final code = (100000 + Random().nextInt(900000)).toString();
-
-      await FirebaseFirestore.instance.collection('users').add({
-        'name': name,
-        'email': email,
-        'contact': contact,
-        'address': address,
-        'role': 'user',
-        'platform': 'mobile',
-        'verificationCode': code,
-        'verified': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      final url = kIsWeb
-          ? Uri.parse("http://localhost:3000/send-verification")
-          : Uri.parse("http://10.0.2.2:3000/send-verification");
-
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"email": email, "code": code}),
-      );
-
-      if (response.statusCode == 200) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) {
-            Future.delayed(const Duration(seconds: 2), () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(
-                context,
-                '/verification',
-                arguments: email,
-              );
-            });
-            return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    height: 200,
-                    width: 400,
-                    child: Lottie.asset(
-                      'assets/check orange.json',
-                      repeat: false,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    "Check your email for the verification code!",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFA30000),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      } else {
-        _showSnackBar("Failed to send verification email.", Colors.red);
-      }
-    } catch (e) {
-      _showSnackBar("Something went wrong: $e", Colors.red);
-    }
+  if (email.toLowerCase().contains("admin")) {
+    _showSnackBar("Admin accounts cannot register in the mobile app.", Colors.red);
+    return;
   }
+
+  if (name.isEmpty || email.isEmpty || contact.isEmpty || address.isEmpty) {
+    _showSnackBar("All fields are required.", Colors.red);
+    return;
+  }
+
+  if (!email.endsWith("@gmail.com")) {
+    _showSnackBar("Email must be a Gmail address.", Colors.red);
+    return;
+  }
+
+  try {
+    final code = (100000 + Random().nextInt(900000)).toString();
+
+    await FirebaseFirestore.instance.collection('users').add({
+      'name': name,
+      'email': email,
+      'contact': contact,
+      'address': address,
+      'role': 'responder',
+      'platform': 'mobile',
+      'verificationCode': code,
+      'verified': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    final url = kIsWeb
+        ? Uri.parse("http://localhost:3000/send-verification")
+        : Uri.parse("http://10.0.2.2:3000/send-verification");
+
+    final response = await http.post(
+      url,
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({"email": email, "code": code}),
+    );
+
+    if (response.statusCode == 200) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          Future.delayed(const Duration(seconds: 2), () {
+            Navigator.pop(context);
+            Navigator.pushReplacementNamed(
+              context,
+              '/verification',
+              arguments: email,
+            );
+          });
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 200,
+                  width: 400,
+                  child: Lottie.asset('assets/check orange.json', repeat: false),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  "Check your email for the verification code!",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFA30000),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    } else {
+      _showSnackBar("Failed to send verification email.", Colors.red);
+    }
+  } catch (e) {
+    _showSnackBar("Something went wrong: $e", Colors.red);
+  }
+}
+
 
   @override
   Widget build(BuildContext context) {

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 // ✅ Import your main and home screens
 import '../main_screen.dart';
-import '../register/add_device.dart';
 import '../app/home/home_page.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -32,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  // ✅ Local-only login (no Firebase)
+  // ✅ Firebase Login for Responder
   Future<void> _login() async {
     final email = usernameController.text.trim().toLowerCase();
     final password = passwordController.text.trim();
@@ -42,19 +43,56 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // Example: Simple static validation (you can replace with API or local DB later)
-    if (email == "user@example.com" && password == "123456") {
+    if (email.contains("admin")) {
+      _showSnackBar("Admin accounts must log in via the web dashboard.", Colors.red);
+      return;
+    }
+
+    try {
+      // 🔥 Sign in with Firebase Auth
+      final userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
+
+      // ✅ Check Firestore for user verification
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+
+      if (userDoc.docs.isEmpty) {
+        _showSnackBar("No user record found in Firestore.", Colors.red);
+        await FirebaseAuth.instance.signOut();
+        return;
+      }
+
+      final userData = userDoc.docs.first.data();
+
+      if (userData['verified'] != true) {
+        _showSnackBar("Please verify your account before logging in.", Colors.red);
+        await FirebaseAuth.instance.signOut();
+        return;
+      }
+
       _showSnackBar("Login successful", Colors.green);
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const HomePage()),
       );
-    } else {
-      _showSnackBar("Invalid email or password.", Colors.red);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found') {
+        _showSnackBar("No account found with this email.", Colors.red);
+      } else if (e.code == 'wrong-password') {
+        _showSnackBar("Incorrect password.", Colors.red);
+      } else {
+        _showSnackBar("Firebase error: ${e.message}", Colors.red);
+      }
+    } catch (e) {
+      _showSnackBar("Something went wrong: $e", Colors.red);
     }
   }
 
-  // ✅ Fingerprint Authentication
+  // ✅ Fingerprint Authentication (optional)
   Future<void> _authenticate() async {
     bool authenticated = false;
     try {
