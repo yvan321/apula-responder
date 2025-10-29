@@ -3,13 +3,23 @@ import nodemailer from "nodemailer";
 import cors from "cors";
 import admin from "firebase-admin";
 import fs from "fs";
+import dotenv from "dotenv";
+
+dotenv.config(); // ✅ Load .env variables
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ✅ Read service account JSON manually (works in Node 22+)
-const serviceAccount = JSON.parse(fs.readFileSync("./serviceAccountKey.json", "utf8"));
+// ✅ Read Firebase service account from path in .env
+const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+if (!fs.existsSync(serviceAccountPath)) {
+  console.error("❌ Firebase key file not found:", serviceAccountPath);
+  process.exit(1);
+}
+
+const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
 
 // 🔥 Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -41,17 +51,17 @@ app.post("/send-verification", async (req, res) => {
     const userDoc = query.docs[0];
     await usersRef.doc(userDoc.id).update({ verificationCode: code });
 
-    // 🔐 Gmail transporter (App Password required)
+    // 🔐 Gmail transporter using .env credentials
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: "alexanderthegreat09071107@gmail.com",
-        pass: "amnwssmjqyexxnfu", // ⚠️ Make sure this is your Gmail App Password
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
       },
     });
 
     const mailOptions = {
-      from: '"Apula Responder" <alexanderthegreat09071107@gmail.com>',
+      from: `"Apula Responder" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: "Your Verification Code",
       html: `
@@ -75,7 +85,7 @@ app.post("/send-verification", async (req, res) => {
 });
 
 // ✅ Start server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
