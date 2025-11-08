@@ -78,9 +78,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    final url = kIsWeb
-        ? Uri.parse("http://localhost:3000/send-verification")
-        : Uri.parse("http://10.0.2.2:3000/send-verification");
+    final url = Uri.parse("http://localhost:3000/send-verification");
+
+
 
     final response = await http.post(
       url,
