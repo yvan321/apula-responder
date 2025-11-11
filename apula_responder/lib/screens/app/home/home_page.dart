@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:apula_responder/screens/app/dispatch/dispatch_page.dart';
+import 'package:apula_responder/screens/app/notifications/notification_page.dart';
+import 'package:apula_responder/screens/app/settings/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:apula_responder/widgets/custom_bottom_nav.dart';
 
@@ -85,8 +87,8 @@ class _HomePageState extends State<HomePage> {
         children: [
           _buildDashboard(context),
           const DispatchPage(devices: []),
-          const Center(child: Text("Notifications 🔔")),
-          const Center(child: Text("Settings ⚙️")),
+          const NotificationsPage(),
+          const SettingsPage(),
         ],
       ),
 

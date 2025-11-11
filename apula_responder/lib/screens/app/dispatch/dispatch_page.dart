@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:apula_responder/widgets/custom_bottom_nav.dart';
 
 class DispatchPage extends StatefulWidget {
   final List<String> devices;
@@ -38,23 +37,6 @@ class _DispatchPageState extends State<DispatchPage> {
     },
   ];
 
-  void _onItemTapped(int index) {
-    setState(() => _selectedIndex = index);
-
-    switch (index) {
-      case 0:
-        Navigator.pushReplacementNamed(context, '/home');
-        break;
-      case 1:
-        break; // Stay on Dispatch
-      case 2:
-        Navigator.pushReplacementNamed(context, '/notifications');
-        break;
-      case 3:
-        Navigator.pushReplacementNamed(context, '/settings');
-        break;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
