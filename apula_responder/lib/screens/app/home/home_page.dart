@@ -4,6 +4,8 @@ import 'package:apula_responder/screens/app/notifications/notification_page.dart
 import 'package:apula_responder/screens/app/settings/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:apula_responder/widgets/custom_bottom_nav.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -18,18 +20,100 @@ class _HomePageState extends State<HomePage> {
   Timer? _timer;
   bool _isDay = true;
 
+  // 🔥 Firestore Dispatch Tracking
+  String _dispatchStatus = "Loading...";
+  String _dispatchLocation = "";
+  StreamSubscription? _dispatchSub;
+
   @override
   void initState() {
     super.initState();
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+    _listenToDispatchStatus();
   }
 
+  // 🔄 Real-time listener for dispatch status
+  void _listenToDispatchStatus() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final dispatchRef = FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1);
+
+    _dispatchSub = dispatchRef.snapshots().listen((snapshot) {
+      if (snapshot.docs.isEmpty) {
+        setState(() {
+          _dispatchStatus = "No Active Dispatch 🔒";
+          _dispatchLocation = "";
+        });
+      } else {
+        final data = snapshot.docs.first.data();
+        setState(() {
+          _dispatchStatus = data['status'] ?? 'Unknown';
+          _dispatchLocation = data['alertLocation'] ?? '';
+        });
+      }
+    });
+  }
+
+  // ✅ Mark Dispatch as Resolved (also updates alert)
+  void _markAsResolved() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      final dispatchDoc = query.docs.first;
+      final dispatchId = dispatchDoc.id;
+      final data = dispatchDoc.data();
+      final alertId = data['alertId'];
+
+      try {
+        // 1️⃣ Update dispatch
+        await FirebaseFirestore.instance
+            .collection('dispatches')
+            .doc(dispatchId)
+            .update({'status': 'Resolved'});
+
+        // 2️⃣ Also update the alert (auto sync with admin)
+        if (alertId != null && alertId.isNotEmpty) {
+          await FirebaseFirestore.instance
+              .collection('alerts')
+              .doc(alertId)
+              .update({'status': 'Resolved'});
+        }
+
+        setState(() {
+          _dispatchStatus = "Resolved";
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("✅ Dispatch marked as resolved.")),
+        );
+      } catch (e) {
+        debugPrint("❌ Error updating: $e");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to update status.")),
+        );
+      }
+    }
+  }
+
+  // 🕒 Time + Date
   void _updateTime() {
     final now = DateTime.now();
     final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
     final period = now.hour >= 12 ? "PM" : "AM";
-
     setState(() {
       _time =
           "$hour:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} $period";
@@ -40,18 +124,8 @@ class _HomePageState extends State<HomePage> {
 
   String _monthName(int month) {
     const months = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
+      "January","February","March","April","May","June",
+      "July","August","September","October","November","December"
     ];
     return months[month - 1];
   }
@@ -59,6 +133,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _dispatchSub?.cancel();
     super.dispose();
   }
 
@@ -82,7 +157,6 @@ class _HomePageState extends State<HomePage> {
               ),
             )
           : null,
-
       body: IndexedStack(
         index: _selectedIndex,
         children: [
@@ -92,14 +166,12 @@ class _HomePageState extends State<HomePage> {
           const SettingsPage(),
         ],
       ),
-
-      // ✅ FIXED: Use colorScheme.surface instead of bottomAppBarColor
       bottomNavigationBar: CustomBottomNavBar(
         selectedIndex: _selectedIndex,
         onItemTapped: _onItemTapped,
-        backgroundColor: theme.colorScheme.surface, // ✅ FIXED
-        activeColor: const Color(0xFFA30000), // 🔥 Active color
-        inactiveColor: Colors.grey, // 🩶 Inactive color
+        backgroundColor: theme.colorScheme.surface,
+        activeColor: const Color(0xFFA30000),
+        inactiveColor: Colors.grey,
       ),
     );
   }
@@ -116,43 +188,8 @@ class _HomePageState extends State<HomePage> {
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
-
-          // 🔥 Status Card
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Colors.red, Colors.orange],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.red.withOpacity(0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Row(
-              children: const [
-                Icon(
-                  Icons.local_fire_department,
-                  color: Colors.white,
-                  size: 40,
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    "No Active Dispatch 🔒",
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          _buildDispatchStatusCard(),
           const SizedBox(height: 20),
-
-          // 🕒 Time & Location
           Row(
             children: [
               Expanded(child: _buildTimeCard()),
@@ -161,21 +198,13 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           const SizedBox(height: 20),
-
-          const Text(
-            "Recent Fire Incidents",
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
+          const Text("Recent Fire Incidents",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           _incidentCard("Molino 3 - Fire Alert", "2 mins ago", "On the way"),
           _incidentCard("Niog - Smoke Detected", "10 mins ago", "Resolved"),
           const SizedBox(height: 20),
-
-          const Text(
-            "Announcements",
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 10),
+          const Text("Announcements",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           _reportItem("Fire Drill Schedule - Nov 5", "Yesterday"),
           _reportItem("Equipment Maintenance Notice", "2 days ago"),
         ],
@@ -183,115 +212,143 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== REUSABLE WIDGETS ======================
-  Widget _buildTimeCard() {
-    final gradientColors = _isDay
-        ? [Colors.yellow.shade200, Colors.orange.shade300]
-        : [Colors.indigo.shade700, Colors.indigo.shade900];
-    final textColor = _isDay ? Colors.black : Colors.white;
+  // ====================== DISPATCH STATUS CARD ======================
+  Widget _buildDispatchStatusCard() {
+    Color startColor, endColor;
+    IconData icon;
+
+    if (_dispatchStatus == "Dispatched") {
+      startColor = Colors.red;
+      endColor = Colors.orange;
+      icon = Icons.local_fire_department;
+    } else if (_dispatchStatus == "Resolved") {
+      startColor = Colors.green;
+      endColor = Colors.teal;
+      icon = Icons.check_circle;
+    } else {
+      startColor = Colors.grey;
+      endColor = Colors.blueGrey;
+      icon = Icons.lock_outline;
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(colors: gradientColors),
+        gradient: LinearGradient(colors: [startColor, endColor]),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 6,
-            offset: const Offset(0, 4),
+            color: startColor.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Icon(
-            _isDay ? Icons.wb_sunny : Icons.nightlight_round,
-            color: textColor,
-            size: 28,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _time,
-            style: TextStyle(
-              color: textColor,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
+          Icon(icon, color: Colors.white, size: 40),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_dispatchStatus,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+                if (_dispatchLocation.isNotEmpty)
+                  Text("Location: $_dispatchLocation",
+                      style: const TextStyle(color: Colors.white70)),
+              ],
             ),
           ),
-          Text(_date, style: TextStyle(color: textColor.withOpacity(0.7))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLocationCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Colors.teal, Colors.tealAccent],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.teal.withOpacity(0.3),
-            blurRadius: 6,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          Icon(Icons.location_on, color: Colors.white, size: 28),
-          SizedBox(height: 8),
-          Text(
-            "Main BFP",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
+          if (_dispatchStatus == "Dispatched")
+            ElevatedButton(
+              onPressed: _markAsResolved,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white, foregroundColor: Colors.red),
+              child: const Text("Resolve"),
             ),
-          ),
-          Text(
-            "Bacoor City",
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
         ],
       ),
     );
   }
 
-  Widget _incidentCard(String title, String time, String status) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        leading: const Icon(Icons.local_fire_department, color: Colors.red),
-        title: Text(title),
-        subtitle: Text(time),
-        trailing: Text(
-          status,
-          style: TextStyle(
-            color: status == "Resolved" ? Colors.green : Colors.orange,
-            fontWeight: FontWeight.bold,
-          ),
+  // ====================== OTHER WIDGETS ======================
+  Widget _buildTimeCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+              colors: _isDay
+                  ? [Colors.yellow.shade200, Colors.orange.shade300]
+                  : [Colors.indigo.shade700, Colors.indigo.shade900]),
+          borderRadius: BorderRadius.circular(16),
         ),
-      ),
-    );
-  }
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(_isDay ? Icons.wb_sunny : Icons.nightlight_round,
+                color: _isDay ? Colors.black : Colors.white, size: 28),
+            const SizedBox(height: 8),
+            Text(_time,
+                style: TextStyle(
+                    color: _isDay ? Colors.black : Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold)),
+            Text(_date,
+                style: TextStyle(
+                    color: (_isDay ? Colors.black : Colors.white)
+                        .withOpacity(0.7))),
+          ],
+        ),
+      );
 
-  Widget _reportItem(String title, String time) {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        leading: const Icon(Icons.announcement, color: Colors.blue),
-        title: Text(title),
-        subtitle: Text(time),
-      ),
-    );
-  }
+  Widget _buildLocationCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+              colors: [Colors.teal, Colors.tealAccent],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.location_on, color: Colors.white, size: 28),
+            SizedBox(height: 8),
+            Text("Main BFP",
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold)),
+            Text("Bacoor City",
+                style: TextStyle(color: Colors.white70, fontSize: 14)),
+          ],
+        ),
+      );
+
+  Widget _incidentCard(String title, String time, String status) => Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          leading: const Icon(Icons.local_fire_department, color: Colors.red),
+          title: Text(title),
+          subtitle: Text(time),
+          trailing: Text(status,
+              style: TextStyle(
+                  color:
+                      status == "Resolved" ? Colors.green : Colors.orange,
+                  fontWeight: FontWeight.bold)),
+        ),
+      );
+
+  Widget _reportItem(String title, String time) => Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          leading: const Icon(Icons.announcement, color: Colors.blue),
+          title: Text(title),
+          subtitle: Text(time),
+        ),
+      );
 }
