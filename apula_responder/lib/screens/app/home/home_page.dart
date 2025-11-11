@@ -94,7 +94,7 @@ class _HomePageState extends State<HomePage> {
 
       bottomNavigationBar: CustomBottomNavBar(
         selectedIndex: _selectedIndex,
-        onItemTapped: _onItemTapped,
+        onItemTapped: _onItemTapped,s
       ),
     );
   }
