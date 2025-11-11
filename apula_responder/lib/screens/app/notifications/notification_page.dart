@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:lottie/lottie.dart';
 
 class NotificationsPage extends StatefulWidget {
@@ -9,56 +11,17 @@ class NotificationsPage extends StatefulWidget {
 }
 
 class _NotificationsPageState extends State<NotificationsPage> {
-  int _selectedIndex = 2; // 🔔 Current tab index (Notifications)
-
-  // 🧠 Mock data (you can later connect to Firestore)
-  final List<Map<String, String>> mockNotifications = [
-    {
-      "title": "🚨 Fire Alert: Molino 3",
-      "message": "Alpha Team 2 dispatched for fire suppression response.",
-      "time": "2 mins ago",
-      "type": "alert",
-    },
-    {
-      "title": "🔥 Update: Warehouse Fire - Niog",
-      "message": "Situation under control. Awaiting final clearance.",
-      "time": "10 mins ago",
-      "type": "update",
-    },
-    {
-      "title": "✅ Resolved: Vehicle Fire - Talaba",
-      "message": "Charlie Unit 3 confirmed incident cleared.",
-      "time": "25 mins ago",
-      "type": "resolved",
-    },
-    {
-      "title": "🧯 Fire Drill Scheduled",
-      "message": "Training session for all responders at HQ - Nov 15, 9 AM.",
-      "time": "1 hr ago",
-      "type": "info",
-    },
-  ];
-
-  void _onItemTapped(int index) {
-    setState(() => _selectedIndex = index);
-    switch (index) {
-      case 0:
-        Navigator.pushReplacementNamed(context, '/home');
-        break;
-      case 1:
-        Navigator.pushReplacementNamed(context, '/dispatch');
-        break;
-      case 2:
-        break;
-      case 3:
-        Navigator.pushReplacementNamed(context, '/settings');
-        break;
-    }
+  @override
+  void initState() {
+    super.initState();
+    final email = FirebaseAuth.instance.currentUser?.email;
+    print("📧 Logged in as: $email");
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final responderEmail = FirebaseAuth.instance.currentUser?.email;
 
     return Scaffold(
       body: SafeArea(
@@ -94,11 +57,141 @@ class _NotificationsPageState extends State<NotificationsPage> {
               ),
               const SizedBox(height: 20),
 
-              // 📜 Notification List or Empty Animation
+              // 🔔 Firestore Stream
               Expanded(
-                child: mockNotifications.isEmpty
-                    ? _buildEmptyState()
-                    : _buildNotificationList(),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('dispatches')
+                      .where('responderEmail', isEqualTo: responderEmail)
+                      .orderBy('timestamp', descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Text(
+                          "⚠️ Firestore Error: ${snapshot.error}",
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      );
+                    }
+
+                    // ✅ Debug
+                    print("📄 Dispatch notifications count: ${snapshot.data?.docs.length}");
+
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return _buildEmptyState();
+                    }
+
+                    final notifications = snapshot.data!.docs;
+
+                    return ListView.builder(
+                      itemCount: notifications.length,
+                      itemBuilder: (context, index) {
+                        final data =
+                            notifications[index].data() as Map<String, dynamic>;
+                        final status = data["status"] ?? "Dispatched";
+
+                        // Safely parse timestamp
+                        String formattedTime = "N/A";
+                        if (data["timestamp"] is Timestamp) {
+                          final ts = (data["timestamp"] as Timestamp).toDate();
+                          formattedTime =
+                              "${ts.year}-${ts.month}-${ts.day} ${ts.hour}:${ts.minute.toString().padLeft(2, '0')}";
+                        } else if (data["timestamp"] is String) {
+                          formattedTime = data["timestamp"];
+                        }
+
+                        // Icons & colors by status
+                        Color typeColor;
+                        IconData typeIcon;
+
+                        switch (status) {
+                          case "Dispatched":
+                            typeColor = Colors.orangeAccent;
+                            typeIcon = Icons.fire_truck_rounded;
+                            break;
+                          case "Resolved":
+                            typeColor = Colors.green;
+                            typeIcon = Icons.check_circle_outline;
+                            break;
+                          default:
+                            typeColor = Colors.redAccent;
+                            typeIcon = Icons.local_fire_department;
+                        }
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: typeColor.withOpacity(0.4),
+                              width: 1,
+                            ),
+                            color: typeColor.withOpacity(0.05),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: typeColor.withOpacity(0.15),
+                                child: Icon(typeIcon, color: typeColor),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      data["alertType"] ?? "New Alert",
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Location: ${data["alertLocation"] ?? "Unknown"}",
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Status: $status",
+                                      style: TextStyle(
+                                        color: typeColor,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Reported by: ${data["userReported"] ?? "Unknown"}",
+                                      style: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Time: $formattedTime",
+                                      style: TextStyle(
+                                        color: Colors.grey[500],
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -107,7 +200,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     );
   }
 
-  /// 🧱 Empty notification animation
+  // 🧱 Empty State Animation
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -125,87 +218,6 @@ class _NotificationsPageState extends State<NotificationsPage> {
           ),
         ],
       ),
-    );
-  }
-
-  /// 🧱 Notification list builder
-  Widget _buildNotificationList() {
-    return ListView.builder(
-      itemCount: mockNotifications.length,
-      itemBuilder: (context, index) {
-        final notif = mockNotifications[index];
-        final type = notif["type"];
-
-        Color typeColor;
-        IconData typeIcon;
-
-        switch (type) {
-          case "alert":
-            typeColor = Colors.redAccent;
-            typeIcon = Icons.local_fire_department_rounded;
-            break;
-          case "update":
-            typeColor = Colors.orangeAccent;
-            typeIcon = Icons.sync_rounded;
-            break;
-          case "resolved":
-            typeColor = Colors.green;
-            typeIcon = Icons.check_circle_outline;
-            break;
-          case "info":
-            typeColor = Colors.blueAccent;
-            typeIcon = Icons.info_outline;
-            break;
-          default:
-            typeColor = Colors.grey;
-            typeIcon = Icons.notifications_none;
-        }
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: typeColor.withOpacity(0.4), width: 1),
-            color: typeColor.withOpacity(0.05),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CircleAvatar(
-                backgroundColor: typeColor.withOpacity(0.15),
-                child: Icon(typeIcon, color: typeColor),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      notif["title"] ?? "",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      notif["message"] ?? "",
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      notif["time"] ?? "",
-                      style:
-                          TextStyle(color: Colors.grey[600], fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }
