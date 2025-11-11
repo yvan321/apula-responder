@@ -66,12 +66,13 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      // ✅ Only show AppBar if user is on Home
       appBar: _selectedIndex == 0
           ? AppBar(
               automaticallyImplyLeading: false,
-              backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+              backgroundColor: theme.appBarTheme.backgroundColor,
               elevation: 0,
               title: Row(
                 children: [
@@ -92,9 +93,13 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
 
+      // ✅ FIXED: Use colorScheme.surface instead of bottomAppBarColor
       bottomNavigationBar: CustomBottomNavBar(
         selectedIndex: _selectedIndex,
-        onItemTapped: _onItemTapped,s
+        onItemTapped: _onItemTapped,
+        backgroundColor: theme.colorScheme.surface, // ✅ FIXED
+        activeColor: const Color(0xFFA30000), // 🔥 Active color
+        inactiveColor: Colors.grey, // 🩶 Inactive color
       ),
     );
   }
@@ -166,7 +171,6 @@ class _HomePageState extends State<HomePage> {
           _incidentCard("Niog - Smoke Detected", "10 mins ago", "Resolved"),
           const SizedBox(height: 20),
 
-          // 📜 Announcements
           const Text(
             "Announcements",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
