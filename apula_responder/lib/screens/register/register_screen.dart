@@ -78,7 +78,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    final url = Uri.parse("http://localhost:3000/send-verification");
+    final url = Uri.parse("http://localhost:3005/send-verification");
 
 
 
