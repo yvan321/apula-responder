@@ -23,7 +23,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const primaryRed = Color(0xFFA30000);
-
+  
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: "Apula",
