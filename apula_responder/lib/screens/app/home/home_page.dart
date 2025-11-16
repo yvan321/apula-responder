@@ -25,6 +25,10 @@ class _HomePageState extends State<HomePage> {
   String _dispatchLocation = "";
   StreamSubscription? _dispatchSub;
 
+  // 🔍 Alert Modal State
+  bool _showAlertModal = false;
+  Map<String, dynamic>? _alertData;
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +64,37 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  // 🔍 View alert details modal
+  void _openAlertDetails() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final dispatch = query.docs.first.data();
+    final alertId = dispatch["alertId"];
+
+    if (alertId == null) return;
+
+    // Fetch ALERT details
+    final alertSnap =
+        await FirebaseFirestore.instance.collection("alerts").doc(alertId).get();
+
+    if (!alertSnap.exists) return;
+
+    setState(() {
+      _alertData = alertSnap.data();
+      _showAlertModal = true;
+    });
+  }
+
   // ✅ Mark Dispatch as Resolved (also updates alert)
   void _markAsResolved() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -85,7 +120,7 @@ class _HomePageState extends State<HomePage> {
             .doc(dispatchId)
             .update({'status': 'Resolved'});
 
-        // 2️⃣ Also update the alert (auto sync with admin)
+        // 2️⃣ Also update the alert
         if (alertId != null && alertId.isNotEmpty) {
           await FirebaseFirestore.instance
               .collection('alerts')
@@ -124,8 +159,18 @@ class _HomePageState extends State<HomePage> {
 
   String _monthName(int month) {
     const months = [
-      "January","February","March","April","May","June",
-      "July","August","September","October","November","December"
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
     ];
     return months[month - 1];
   }
@@ -142,6 +187,17 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // Show Alert Modal
+    if (_showAlertModal) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        showDialog(
+          context: context,
+          builder: (context) => _alertDetailsModal(),
+        );
+        _showAlertModal = false;
+      });
+    }
 
     return Scaffold(
       appBar: _selectedIndex == 0
@@ -183,13 +239,14 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            "Ready to Respond",
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-          ),
+          const Text("Ready to Respond",
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
+
+          // DISPATCH STATUS CARD
           _buildDispatchStatusCard(),
           const SizedBox(height: 20),
+
           Row(
             children: [
               Expanded(child: _buildTimeCard()),
@@ -197,16 +254,26 @@ class _HomePageState extends State<HomePage> {
               Expanded(child: _buildLocationCard()),
             ],
           ),
+
           const SizedBox(height: 20),
+
+          // RECENT INCIDENTS
           const Text("Recent Fire Incidents",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
           _incidentCard("Molino 3 - Fire Alert", "2 mins ago", "On the way"),
           _incidentCard("Niog - Smoke Detected", "10 mins ago", "Resolved"),
+
           const SizedBox(height: 20),
+
+          // ANNOUNCEMENTS
           const Text("Announcements",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
           _reportItem("Fire Drill Schedule - Nov 5", "Yesterday"),
           _reportItem("Equipment Maintenance Notice", "2 days ago"),
+
+          const SizedBox(height: 30),
         ],
       ),
     );
@@ -263,14 +330,84 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-          if (_dispatchStatus == "Dispatched")
+
+          if (_dispatchStatus == "Dispatched") ...[
+            ElevatedButton(
+              onPressed: _openAlertDetails,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.blue,
+              ),
+              child: const Text("View"),
+            ),
+            const SizedBox(width: 8),
             ElevatedButton(
               onPressed: _markAsResolved,
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white, foregroundColor: Colors.red),
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.red,
+              ),
               child: const Text("Resolve"),
             ),
+          ],
         ],
+      ),
+    );
+  }
+
+  // ====================== ALERT DETAILS MODAL ======================
+  Widget _alertDetailsModal() {
+    if (_alertData == null) return const SizedBox();
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        width: 350,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("🔥 Alert Details",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+
+              Text("Type: ${_alertData!['type'] ?? 'Unknown'}"),
+              Text("Location: ${_alertData!['location'] ?? 'Unknown'}"),
+              Text("Status: ${_alertData!['status'] ?? 'Unknown'}"),
+              const SizedBox(height: 12),
+
+              const Text("👤 Reporter:",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              Text("Name: ${_alertData!['userName'] ?? 'N/A'}"),
+              Text("Contact: ${_alertData!['userContact'] ?? 'N/A'}"),
+              Text("Address: ${_alertData!['userAddress'] ?? 'N/A'}"),
+              const SizedBox(height: 12),
+
+              const Text("🕒 Date & Time:",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(_alertData!['timestamp'] != null
+                  ? DateTime.fromMillisecondsSinceEpoch(
+                          _alertData!['timestamp'].seconds * 1000)
+                      .toString()
+                  : "N/A"),
+              const SizedBox(height: 12),
+
+              const Text("📝 Description:",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(_alertData!['description'] ?? "No description provided"),
+              const SizedBox(height: 20),
+
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close"),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -337,8 +474,7 @@ class _HomePageState extends State<HomePage> {
           subtitle: Text(time),
           trailing: Text(status,
               style: TextStyle(
-                  color:
-                      status == "Resolved" ? Colors.green : Colors.orange,
+                  color: status == "Resolved" ? Colors.green : Colors.orange,
                   fontWeight: FontWeight.bold)),
         ),
       );
