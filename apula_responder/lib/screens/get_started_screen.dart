@@ -40,7 +40,7 @@ class _GetStartedScreenState extends State<GetStartedScreen> {
           children: [
             const Spacer(),
             // Logo
-            Center(child: Image.asset("assets/logo.png", width: 150)),
+            Center(child: Image.asset("assets/logo.png", width: 200)),
             const Spacer(),
 
             // Animated rounded container
