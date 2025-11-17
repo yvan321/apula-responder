@@ -20,12 +20,12 @@ class _HomePageState extends State<HomePage> {
   Timer? _timer;
   bool _isDay = true;
 
-  // 🔥 Firestore Dispatch Tracking
+  // 🔥 Dispatch Tracking
   String _dispatchStatus = "Loading...";
   String _dispatchLocation = "";
   StreamSubscription? _dispatchSub;
 
-  // 🔍 Alert Modal State
+  // 🔍 Alert Modal
   bool _showAlertModal = false;
   Map<String, dynamic>? _alertData;
 
@@ -37,14 +37,14 @@ class _HomePageState extends State<HomePage> {
     _listenToDispatchStatus();
   }
 
-  // 🔄 Real-time listener for dispatch status
+  // 🔥 REAL-TIME DISPATCH LISTENER
   void _listenToDispatchStatus() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final dispatchRef = FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
+        .where('responderEmails', arrayContains: user.email?.toLowerCase())
         .orderBy('timestamp', descending: true)
         .limit(1);
 
@@ -57,33 +57,31 @@ class _HomePageState extends State<HomePage> {
       } else {
         final data = snapshot.docs.first.data();
         setState(() {
-          _dispatchStatus = data['status'] ?? 'Unknown';
-          _dispatchLocation = data['alertLocation'] ?? '';
+          _dispatchStatus = data['status'] ?? "Unknown";
+          _dispatchLocation = data['alertLocation'] ?? "";
         });
       }
     });
   }
 
-  // 🔍 View alert details modal
+  // 🔍 VIEW ALERT DETAILS
   void _openAlertDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final query = await FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
+        .where('responderEmails', arrayContains: user.email?.toLowerCase())
         .orderBy('timestamp', descending: true)
         .limit(1)
         .get();
 
     if (query.docs.isEmpty) return;
 
-    final dispatch = query.docs.first.data();
-    final alertId = dispatch["alertId"];
-
+    final data = query.docs.first.data();
+    final alertId = data["alertId"];
     if (alertId == null) return;
 
-    // Fetch ALERT details
     final alertSnap =
         await FirebaseFirestore.instance.collection("alerts").doc(alertId).get();
 
@@ -95,60 +93,67 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // ✅ Mark Dispatch as Resolved (also updates alert)
+  // 🔥 MARK AS RESOLVED
   void _markAsResolved() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    final query = await FirebaseFirestore.instance
+  final query = await FirebaseFirestore.instance
+      .collection('dispatches')
+      .where('responderEmails', arrayContains: user.email?.toLowerCase())
+      .orderBy('timestamp', descending: true)
+      .limit(1)
+      .get();
+
+  if (query.docs.isEmpty) return;
+
+  final dispatchDoc = query.docs.first;
+  final dispatchId = dispatchDoc.id;
+  final data = dispatchDoc.data();
+
+  final alertId = data["alertId"];
+  final responders = data["responders"] as List<dynamic>;
+
+  try {
+    // 1️⃣ UPDATE DISPATCH
+    await FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmail', isEqualTo: user.email?.toLowerCase())
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
+        .doc(dispatchId)
+        .update({'status': 'Resolved'});
 
-    if (query.docs.isNotEmpty) {
-      final dispatchDoc = query.docs.first;
-      final dispatchId = dispatchDoc.id;
-      final data = dispatchDoc.data();
-      final alertId = data['alertId'];
-
-      try {
-        // 1️⃣ Update dispatch
-        await FirebaseFirestore.instance
-            .collection('dispatches')
-            .doc(dispatchId)
-            .update({'status': 'Resolved'});
-
-        // 2️⃣ Also update the alert
-        if (alertId != null && alertId.isNotEmpty) {
-          await FirebaseFirestore.instance
-              .collection('alerts')
-              .doc(alertId)
-              .update({'status': 'Resolved'});
-        }
-
-        setState(() {
-          _dispatchStatus = "Resolved";
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("✅ Dispatch marked as resolved.")),
-        );
-      } catch (e) {
-        debugPrint("❌ Error updating: $e");
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to update status.")),
-        );
-      }
+    // 2️⃣ UPDATE ALERT
+    if (alertId != null) {
+      await FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(alertId)
+          .update({'status': 'Resolved'});
     }
-  }
 
-  // 🕒 Time + Date
+    // 3️⃣ UPDATE RESPONDER USER STATUS
+    for (var r in responders) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(r["id"])
+          .update({'status': 'Available'});
+    }
+
+    setState(() => _dispatchStatus = "Resolved");
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Dispatch resolved.")),
+    );
+  } catch (e) {
+    debugPrint("Error: $e");
+  }
+}
+
+
+  // TIME + DATE
   void _updateTime() {
     final now = DateTime.now();
     final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
     final period = now.hour >= 12 ? "PM" : "AM";
+
     setState(() {
       _time =
           "$hour:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} $period";
@@ -159,18 +164,8 @@ class _HomePageState extends State<HomePage> {
 
   String _monthName(int month) {
     const months = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December"
+      "January","February","March","April","May","June",
+      "July","August","September","October","November","December"
     ];
     return months[month - 1];
   }
@@ -188,7 +183,6 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Show Alert Modal
     if (_showAlertModal) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         showDialog(
@@ -232,7 +226,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== HOME / DASHBOARD ======================
+  // ====================== HOME UI ======================
   Widget _buildDashboard(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -243,21 +237,19 @@ class _HomePageState extends State<HomePage> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
 
-          // DISPATCH STATUS CARD
           _buildDispatchStatusCard(),
           const SizedBox(height: 20),
 
           Row(
             children: [
-              Expanded(child: _buildTimeCard()),
-              const SizedBox(width: 12),
-              Expanded(child: _buildLocationCard()),
-            ],
+            Expanded(child: _buildTimeCard()),
+            const SizedBox(width: 12),
+            Expanded(child: _buildLocationCard()),
+          ],
           ),
 
           const SizedBox(height: 20),
 
-          // RECENT INCIDENTS
           const Text("Recent Fire Incidents",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
@@ -266,7 +258,6 @@ class _HomePageState extends State<HomePage> {
 
           const SizedBox(height: 20),
 
-          // ANNOUNCEMENTS
           const Text("Announcements",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
@@ -303,18 +294,12 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         gradient: LinearGradient(colors: [startColor, endColor]),
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: startColor.withOpacity(0.3),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
       ),
       child: Row(
         children: [
           Icon(icon, color: Colors.white, size: 40),
           const SizedBox(width: 12),
+
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -335,18 +320,14 @@ class _HomePageState extends State<HomePage> {
             ElevatedButton(
               onPressed: _openAlertDetails,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.blue,
-              ),
+                  backgroundColor: Colors.white, foregroundColor: Colors.blue),
               child: const Text("View"),
             ),
             const SizedBox(width: 8),
             ElevatedButton(
               onPressed: _markAsResolved,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.red,
-              ),
+                  backgroundColor: Colors.white, foregroundColor: Colors.red),
               child: const Text("Resolve"),
             ),
           ],
@@ -355,7 +336,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== ALERT DETAILS MODAL ======================
+  // ====================== ALERT MODAL ======================
   Widget _alertDetailsModal() {
     if (_alertData == null) return const SizedBox();
 
@@ -375,13 +356,14 @@ class _HomePageState extends State<HomePage> {
               Text("Type: ${_alertData!['type'] ?? 'Unknown'}"),
               Text("Location: ${_alertData!['location'] ?? 'Unknown'}"),
               Text("Status: ${_alertData!['status'] ?? 'Unknown'}"),
-              const SizedBox(height: 12),
 
+              const SizedBox(height: 12),
               const Text("👤 Reporter:",
                   style: TextStyle(fontWeight: FontWeight.bold)),
               Text("Name: ${_alertData!['userName'] ?? 'N/A'}"),
               Text("Contact: ${_alertData!['userContact'] ?? 'N/A'}"),
               Text("Address: ${_alertData!['userAddress'] ?? 'N/A'}"),
+
               const SizedBox(height: 12),
 
               const Text("🕒 Date & Time:",
@@ -391,13 +373,14 @@ class _HomePageState extends State<HomePage> {
                           _alertData!['timestamp'].seconds * 1000)
                       .toString()
                   : "N/A"),
+
               const SizedBox(height: 12),
 
               const Text("📝 Description:",
                   style: TextStyle(fontWeight: FontWeight.bold)),
               Text(_alertData!['description'] ?? "No description provided"),
-              const SizedBox(height: 20),
 
+              const SizedBox(height: 20),
               Align(
                 alignment: Alignment.centerRight,
                 child: ElevatedButton(
@@ -412,7 +395,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== OTHER WIDGETS ======================
+  // ====================== OTHER UI WIDGETS ======================
   Widget _buildTimeCard() => Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
