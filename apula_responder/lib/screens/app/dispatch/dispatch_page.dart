@@ -20,6 +20,52 @@ class _DispatchPageState extends State<DispatchPage> {
     print("📧 Logged in as: $email");
   }
 
+  // ===========================
+  // 🔥 CENTER MODAL POPUP
+  // ===========================
+  void _openDetailsModal(Map<String, dynamic> data) {
+    final time = (data["timestamp"] as Timestamp).toDate();
+
+    showDialog(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text("Dispatch Details"),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("🔥 Alert: ${data['alertType']}"),
+                Text("📍 Location: ${data['alertLocation']}"),
+                Text("🏠 Caller Address: ${data['userAddress'] ?? "Not Provided"}"),
+                Text("👤 Reported By: ${data['userReported']}"),
+                Text("📌 Status: ${data['status']}"),
+                Text("🕒 Time: $time"),
+
+                const SizedBox(height: 15),
+                const Text(
+                  "Responders:",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+
+                ...((data["responders"] ?? []) as List)
+                    .map((r) => Text("- ${r["name"]} (${r["email"]})")),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: const Text("Close"),
+              onPressed: () => Navigator.pop(context),
+            )
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentEmail = FirebaseAuth.instance.currentUser?.email;
@@ -103,20 +149,18 @@ class _DispatchPageState extends State<DispatchPage> {
                     return ListView.builder(
                       itemCount: docs.length,
                       itemBuilder: (context, index) {
-                        final data =
-                            docs[index].data() as Map<String, dynamic>;
+                        final data = docs[index].data() as Map<String, dynamic>;
 
                         final String status = data["status"] ?? "Unknown";
                         final List<dynamic> responders =
                             data["responders"] ?? [];
 
-                        // 🔎 Find currently logged-in responder
-                        final myResponderData = responders.firstWhere(
-                          (r) => r["email"] == currentEmail,
-                          orElse: () => null,
-                        );
+                        final myResponder =
+                            responders.firstWhere(
+                              (r) => r["email"] == currentEmail,
+                              orElse: () => null,
+                            );
 
-                        // 🕒 Format timestamp
                         String formattedTime = "N/A";
                         if (data["timestamp"] is Timestamp) {
                           final ts = (data["timestamp"] as Timestamp).toDate();
@@ -128,95 +172,101 @@ class _DispatchPageState extends State<DispatchPage> {
                         if (status == "Resolved") statusColor = Colors.green;
                         if (status == "Dispatched") statusColor = Colors.redAccent;
 
-                        return Card(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          elevation: 4,
-                          margin: const EdgeInsets.only(bottom: 16),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Icon(
-                                  Icons.local_fire_department,
-                                  color: Color(0xFFA30000),
-                                  size: 36,
-                                ),
-                                const SizedBox(width: 12),
+                        // ===========================
+                        // 🔥 CARD WITH TAP → MODAL
+                        // ===========================
+                        return GestureDetector(
+                          onTap: () => _openDetailsModal(data),
+                          child: Card(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            elevation: 4,
+                            margin: const EdgeInsets.only(bottom: 16),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(
+                                    Icons.local_fire_department,
+                                    color: Color(0xFFA30000),
+                                    size: 36,
+                                  ),
+                                  const SizedBox(width: 12),
 
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        data["alertType"] ?? "Fire Alert",
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 17,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-
-                                      Text(
-                                        "Location: ${data["alertLocation"] ?? "Unknown"}",
-                                        style: TextStyle(
-                                          color: Colors.grey[700],
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-
-                                      Text(
-                                        "Reported by: ${data["userReported"] ?? "Unknown"}",
-                                        style: TextStyle(
-                                          color: Colors.grey[700],
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-
-                                      Text(
-                                        "You: ${myResponderData?["name"] ?? "Responder"}",
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w500,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-
-                                      Text(
-                                        "Time: $formattedTime",
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 10),
-
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 4, horizontal: 10),
-                                        decoration: BoxDecoration(
-                                          color: statusColor.withOpacity(0.15),
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          status,
-                                          style: TextStyle(
-                                            color: statusColor,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          data["alertType"] ?? "Fire Alert",
+                                          style: const TextStyle(
                                             fontWeight: FontWeight.bold,
-                                            fontSize: 13,
+                                            fontSize: 17,
                                           ),
                                         ),
-                                      ),
-                                    ],
+                                        const SizedBox(height: 4),
+
+                                        Text(
+                                          "Location: ${data["alertLocation"] ?? "Unknown"}",
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+
+                                        Text(
+                                          "Reported by: ${data["userReported"] ?? "Unknown"}",
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+
+                                        Text(
+                                          "You: ${myResponder?["name"] ?? "Responder"}",
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w500,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+
+                                        Text(
+                                          "Time: $formattedTime",
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 4, horizontal: 10),
+                                          decoration: BoxDecoration(
+                                            color: statusColor.withOpacity(0.15),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Text(
+                                            status,
+                                            style: TextStyle(
+                                              color: statusColor,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         );
