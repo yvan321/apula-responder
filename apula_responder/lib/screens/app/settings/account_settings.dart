@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class AccountSettingsPage extends StatefulWidget {
   const AccountSettingsPage({super.key});
@@ -9,15 +11,49 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
-  final _nameController = TextEditingController(text: "Responder Alpha Team 2");
-  final _contactController = TextEditingController(text: "+639123456789");
-  final _stationController = TextEditingController(text: "Molino Fire Station");
+  final _nameController = TextEditingController();
+  final _contactController = TextEditingController();
+  final _stationController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
-  bool _isLoading = false;
+  bool _isLoading = true;
+  String? _docId; // the Firestore document id for this user
 
-  void _saveChanges() {
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData();
+  }
+
+  // 🔥 Load Firestore document based on user's email
+  Future<void> _loadUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection("users")
+        .where("email", isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      final doc = query.docs.first;
+      _docId = doc.id;
+
+      setState(() {
+        _nameController.text = doc["name"] ?? "";
+        _contactController.text = doc["contact"] ?? "";
+        _stationController.text = doc["address"] ?? "";
+        _isLoading = false;
+      });
+    } else {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // 🔥 Save data
+  Future<void> _saveChanges() async {
     final name = _nameController.text.trim();
     final contact = _contactController.text.trim();
     final station = _stationController.text.trim();
@@ -40,10 +76,27 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       builder: (context) => _loadingDialog("Saving changes..."),
     );
 
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.pop(context); // close loading
+    try {
+      // 🔥 Update Firestore fields
+      if (_docId != null) {
+        await FirebaseFirestore.instance.collection("users").doc(_docId).update({
+          "name": name,
+          "contact": contact,
+          "address": station,
+        });
+      }
+
+      // 🔥 Update password (optional)
+      if (pass.isNotEmpty) {
+        await FirebaseAuth.instance.currentUser!.updatePassword(pass);
+      }
+
+      Navigator.pop(context);
       _showSuccessDialog("Changes saved successfully!");
-    });
+    } catch (e) {
+      Navigator.pop(context);
+      _showSnackBar("Error: $e", Colors.red);
+    }
   }
 
   void _showSnackBar(String message, Color bgColor) {
@@ -84,8 +137,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       barrierDismissible: false,
       builder: (context) {
         Future.delayed(const Duration(seconds: 2), () {
-          Navigator.pop(context); // close success dialog
-          Navigator.pop(context); // go back to settings
+          Navigator.pop(context);
+          Navigator.pop(context);
         });
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -124,28 +177,18 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 🔙 Back Button
+                  // Back Button
                   Padding(
                     padding: const EdgeInsets.only(left: 10, top: 10),
                     child: InkWell(
                       onTap: () => Navigator.pop(context),
-                      borderRadius: BorderRadius.circular(30),
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: const BoxDecoration(shape: BoxShape.circle),
-                        child: const Icon(
-                          Icons.chevron_left,
-                          size: 30,
-                          color: redColor,
-                        ),
-                      ),
+                      child: const Icon(Icons.chevron_left,
+                          size: 30, color: redColor),
                     ),
                   ),
 
-                  // 🏷️ Title
                   const Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 20),
                     child: Text(
                       "Account Settings",
                       style: TextStyle(
@@ -156,7 +199,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                     ),
                   ),
 
-                  // 📋 Form
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(20),
@@ -165,58 +207,36 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                           children: [
                             TextField(
                               controller: _nameController,
-                              decoration: InputDecoration(
-                                labelText: "Name",
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                              decoration: _input("Name"),
                             ),
                             const SizedBox(height: 20),
+
                             TextField(
                               controller: _contactController,
-                              decoration: InputDecoration(
-                                labelText: "Contact Number",
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                              decoration: _input("Contact Number"),
                             ),
                             const SizedBox(height: 20),
+
                             TextField(
                               controller: _stationController,
-                              decoration: InputDecoration(
-                                labelText: "Fire Station",
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                              decoration: _input("Address"),
                             ),
                             const SizedBox(height: 20),
+
                             TextField(
                               controller: _passwordController,
                               obscureText: true,
-                              decoration: InputDecoration(
-                                labelText: "New Password (optional)",
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                              decoration: _input("New Password (optional)"),
                             ),
                             const SizedBox(height: 20),
+
                             TextField(
                               controller: _confirmPasswordController,
                               obscureText: true,
-                              decoration: InputDecoration(
-                                labelText: "Confirm Password",
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                              decoration: _input("Confirm Password"),
                             ),
                             const SizedBox(height: 30),
 
-                            // ✅ Save Button
                             SizedBox(
                               width: double.infinity,
                               height: 50,
@@ -238,7 +258,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 30),
                           ],
                         ),
                       ),
@@ -246,6 +265,15 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+
+  InputDecoration _input(String label) {
+    return InputDecoration(
+      labelText: label,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
       ),
     );
   }

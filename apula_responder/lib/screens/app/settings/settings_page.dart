@@ -1,7 +1,9 @@
 import 'package:apula_responder/screens/app/settings/account_settings.dart';
 import 'package:apula_responder/screens/app/settings/notifsetting_page.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'about_page.dart'; // ✅ Ensure correct path
+import 'about_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -11,12 +13,38 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  // Mock responder info
-  final String _responderName = "Responder Alpha Team 2";
-  final String _responderStation = "Molino Fire Station";
-  final String _responderID = "ID: 0421-BFP";
+  String responderName = "";
+  String responderAddress = "";
+  bool _darkMode = false;
+  bool _loading = true;
 
-  bool _darkMode = false; // local toggle only, not app-wide
+  @override
+  void initState() {
+    super.initState();
+    _loadResponderData();
+  }
+
+  // 🔥 Load Firestore user data by email (works with random doc ID)
+  Future<void> _loadResponderData() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    final query = await FirebaseFirestore.instance
+        .collection("users")
+        .where("email", isEqualTo: user!.email)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      final doc = query.docs.first;
+      setState(() {
+        responderName = doc["name"] ?? "";
+        responderAddress = doc["address"] ?? "";
+        _loading = false;
+      });
+    } else {
+      setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +65,6 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 🏷️ Title
               const Padding(
                 padding: EdgeInsets.only(left: 20, top: 20),
                 child: Text(
@@ -51,13 +78,13 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 50),
 
-              // ⚪ Inner Container
               Expanded(
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
                     Container(
                       width: double.infinity,
+                        height: double.infinity,   // 🔥 ADD THIS
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: const BorderRadius.only(
@@ -70,7 +97,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.symmetric(
-                          vertical: 70,
+                          vertical: 30,  // 🔥 Reduced vertical padding since profile is removed
                           horizontal: 20,
                         ),
                         child: Column(
@@ -80,7 +107,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             Column(
                               children: [
                                 Text(
-                                  _responderName,
+                                  _loading ? "Loading..." : responderName,
                                   style: const TextStyle(
                                     color: redColor,
                                     fontSize: 20,
@@ -88,26 +115,19 @@ class _SettingsPageState extends State<SettingsPage> {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
+
                                 Text(
-                                  _responderStation,
+                                  _loading ? "Loading..." : responderAddress,
                                   style: TextStyle(
                                     color: Colors.grey[700],
                                     fontSize: 14,
                                   ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _responderID,
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: 13,
-                                  ),
-                                ),
                               ],
                             ),
+
                             const SizedBox(height: 35),
 
-                            // ⚙️ Settings List
                             _buildThemeToggleTile(),
                             _buildSettingsTile(
                               Icons.notifications_none_outlined,
@@ -158,49 +178,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
 
-                    // 👤 Profile Picture
-                    Positioned(
-                      top: -55,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Stack(
-                          alignment: Alignment.bottomRight,
-                          children: [
-                            const CircleAvatar(
-                              radius: 55,
-                              backgroundImage: AssetImage(
-                                'assets/examples/responder_pic.jpg',
-                              ),
-                              backgroundColor: Colors.transparent,
-                            ),
-                            Positioned(
-                              bottom: 6,
-                              right: 6,
-                              child: Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 3,
-                                      offset: const Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.edit,
-                                  size: 18,
-                                  color: redColor,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    // ❌ Entire profile picture + edit icon REMOVED
                   ],
                 ),
               ),
@@ -211,19 +189,14 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // 🔔 Snackbar helper
   void _showSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
   }
 
-  // ⚙️ Settings Tile
-  Widget _buildSettingsTile(
-    IconData icon,
-    String title, {
-    VoidCallback? onTap,
-  }) {
+  Widget _buildSettingsTile(IconData icon, String title,
+      {VoidCallback? onTap}) {
     const redColor = Color(0xFFA30000);
 
     return Container(
@@ -250,17 +223,13 @@ class _SettingsPageState extends State<SettingsPage> {
             fontWeight: FontWeight.w500,
           ),
         ),
-        trailing: const Icon(
-          Icons.arrow_forward_ios,
-          size: 16,
-          color: Colors.grey,
-        ),
-        onTap: onTap ?? () {},
+        trailing: const Icon(Icons.arrow_forward_ios,
+            size: 16, color: Colors.grey),
+        onTap: onTap,
       ),
     );
   }
 
-  // 🌗 Local Theme Toggle (non-global)
   Widget _buildThemeToggleTile() {
     const redColor = Color(0xFFA30000);
 
@@ -269,7 +238,7 @@ class _SettingsPageState extends State<SettingsPage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE0E0E0)),
+        border: Border.all(color: Color(0xFFE0E0E0)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
