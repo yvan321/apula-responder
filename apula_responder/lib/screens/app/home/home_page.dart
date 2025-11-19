@@ -24,6 +24,10 @@ class _HomePageState extends State<HomePage> {
   String _dispatchStatus = "Loading...";
   String _dispatchLocation = "";
   StreamSubscription? _dispatchSub;
+  String _callerAddress = "";
+
+  // 🔥 Recent Alerts
+  List<Map<String, dynamic>> _recentAlerts = [];
 
   // 🔍 Alert Modal
   bool _showAlertModal = false;
@@ -35,6 +39,7 @@ class _HomePageState extends State<HomePage> {
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
     _listenToDispatchStatus();
+    _loadRecentAlerts();
   }
 
   // 🔥 REAL-TIME DISPATCH LISTENER
@@ -58,13 +63,32 @@ class _HomePageState extends State<HomePage> {
         final data = snapshot.docs.first.data();
         setState(() {
           _dispatchStatus = data['status'] ?? "Unknown";
-          _dispatchLocation = data['alertLocation'] ?? "";
+          _callerAddress = data['userAddress'] ?? "";
         });
       }
     });
   }
 
-  // 🔍 VIEW ALERT DETAILS
+  // 🔥 Load Recent Alerts
+  Future<void> _loadRecentAlerts() async {
+    final query = await FirebaseFirestore.instance
+        .collection('alerts')
+        .orderBy('timestamp', descending: true)
+        .limit(3)
+        .get();
+
+    final alerts = query.docs.map((doc) {
+      final data = doc.data();
+      data['id'] = doc.id;
+      return data;
+    }).toList();
+
+    setState(() {
+      _recentAlerts = alerts;
+    });
+  }
+
+  // 🔍 VIEW ALERT DETAILS (FULL MODAL)
   void _openAlertDetails() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -95,58 +119,54 @@ class _HomePageState extends State<HomePage> {
 
   // 🔥 MARK AS RESOLVED
   void _markAsResolved() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-  final query = await FirebaseFirestore.instance
-      .collection('dispatches')
-      .where('responderEmails', arrayContains: user.email?.toLowerCase())
-      .orderBy('timestamp', descending: true)
-      .limit(1)
-      .get();
-
-  if (query.docs.isEmpty) return;
-
-  final dispatchDoc = query.docs.first;
-  final dispatchId = dispatchDoc.id;
-  final data = dispatchDoc.data();
-
-  final alertId = data["alertId"];
-  final responders = data["responders"] as List<dynamic>;
-
-  try {
-    // 1️⃣ UPDATE DISPATCH
-    await FirebaseFirestore.instance
+    final query = await FirebaseFirestore.instance
         .collection('dispatches')
-        .doc(dispatchId)
-        .update({'status': 'Resolved'});
+        .where('responderEmails', arrayContains: user.email?.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
 
-    // 2️⃣ UPDATE ALERT
-    if (alertId != null) {
+    if (query.docs.isEmpty) return;
+
+    final dispatchDoc = query.docs.first;
+    final dispatchId = dispatchDoc.id;
+    final data = dispatchDoc.data();
+
+    final alertId = data["alertId"];
+    final responders = data["responders"] as List<dynamic>;
+
+    try {
       await FirebaseFirestore.instance
-          .collection('alerts')
-          .doc(alertId)
+          .collection('dispatches')
+          .doc(dispatchId)
           .update({'status': 'Resolved'});
+
+      if (alertId != null) {
+        await FirebaseFirestore.instance
+            .collection('alerts')
+            .doc(alertId)
+            .update({'status': 'Resolved'});
+      }
+
+      for (var r in responders) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(r["id"])
+            .update({'status': 'Available'});
+      }
+
+      setState(() => _dispatchStatus = "Resolved");
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Dispatch resolved.")),
+      );
+    } catch (e) {
+      debugPrint("Error: $e");
     }
-
-    // 3️⃣ UPDATE RESPONDER USER STATUS
-    for (var r in responders) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(r["id"])
-          .update({'status': 'Available'});
-    }
-
-    setState(() => _dispatchStatus = "Resolved");
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Dispatch resolved.")),
-    );
-  } catch (e) {
-    debugPrint("Error: $e");
   }
-}
-
 
   // TIME + DATE
   void _updateTime() {
@@ -242,10 +262,10 @@ class _HomePageState extends State<HomePage> {
 
           Row(
             children: [
-            Expanded(child: _buildTimeCard()),
-            const SizedBox(width: 12),
-            Expanded(child: _buildLocationCard()),
-          ],
+              Expanded(child: _buildTimeCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildLocationCard()),
+            ],
           ),
 
           const SizedBox(height: 20),
@@ -253,19 +273,79 @@ class _HomePageState extends State<HomePage> {
           const Text("Recent Fire Incidents",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
-          _incidentCard("Molino 3 - Fire Alert", "2 mins ago", "On the way"),
-          _incidentCard("Niog - Smoke Detected", "10 mins ago", "Resolved"),
 
-          const SizedBox(height: 20),
-
-          const Text("Announcements",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          _reportItem("Fire Drill Schedule - Nov 5", "Yesterday"),
-          _reportItem("Equipment Maintenance Notice", "2 days ago"),
+          Column(
+            children: _recentAlerts.map((alert) {
+              return _recentIncidentCard(alert);
+            }).toList(),
+          ),
 
           const SizedBox(height: 30),
         ],
+      ),
+    );
+  }
+
+  // ====================== NEW INCIDENT CARD ======================
+  Widget _recentIncidentCard(Map<String, dynamic> alert) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        leading: const Icon(Icons.local_fire_department, color: Colors.red),
+        title: Text(alert['type'] ?? "Unknown Alert"),
+        subtitle: Text("Address: ${alert['userAddress'] ?? 'N/A'}"),
+        trailing: ElevatedButton(
+          onPressed: () => _openAlertViewModal(alert),
+          child: const Text("View"),
+        ),
+      ),
+    );
+  }
+
+  // ====================== VIEW MODAL (NO DESCRIPTION / NO READ) ======================
+  void _openAlertViewModal(Map<String, dynamic> alert) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          width: 350,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("🔥 Incident Details",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+
+              Text("Type: ${alert['type'] ?? 'Unknown'}"),
+              Text("Location: ${alert['location'] ?? 'Unknown'}"),
+              Text("Reporter: ${alert['userName'] ?? 'N/A'}"),
+              Text("Contact: ${alert['userContact'] ?? 'N/A'}"),
+              Text("Address: ${alert['userAddress'] ?? 'N/A'}"),
+
+              const SizedBox(height: 12),
+
+              const Text("🕒 Timestamp:",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(alert['timestamp'] != null
+                  ? DateTime.fromMillisecondsSinceEpoch(
+                          alert['timestamp'].seconds * 1000)
+                      .toString()
+                  : "N/A"),
+
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close"),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -309,8 +389,9 @@ class _HomePageState extends State<HomePage> {
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.bold)),
-                if (_dispatchLocation.isNotEmpty)
-                  Text("Location: $_dispatchLocation",
+
+                if (_callerAddress.isNotEmpty)
+                  Text("Address: $_callerAddress",
                       style: const TextStyle(color: Colors.white70)),
               ],
             ),
@@ -336,7 +417,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== ALERT MODAL ======================
+  // ====================== ALERT MODAL USED FOR DISPATCH ======================
   Widget _alertDetailsModal() {
     if (_alertData == null) return const SizedBox();
 
@@ -373,12 +454,6 @@ class _HomePageState extends State<HomePage> {
                           _alertData!['timestamp'].seconds * 1000)
                       .toString()
                   : "N/A"),
-
-              const SizedBox(height: 12),
-
-              const Text("📝 Description:",
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              Text(_alertData!['description'] ?? "No description provided"),
 
               const SizedBox(height: 20),
               Align(
