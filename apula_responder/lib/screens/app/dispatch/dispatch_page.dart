@@ -12,6 +12,8 @@ class DispatchPage extends StatefulWidget {
 
 class _DispatchPageState extends State<DispatchPage> {
   int _prevCount = 0;
+  String searchQuery = "";
+  DateTime? selectedDate;
 
   @override
   void initState() {
@@ -20,50 +22,54 @@ class _DispatchPageState extends State<DispatchPage> {
     print("📧 Logged in as: $email");
   }
 
-  // ===========================
-  // 🔥 CENTER MODAL POPUP
-  // ===========================
+  // 🔥 Modal Popup
   void _openDetailsModal(Map<String, dynamic> data) {
     final time = (data["timestamp"] as Timestamp).toDate();
 
     showDialog(
       context: context,
-      builder: (_) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text("Dispatch Details"),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("🔥 Alert: ${data['alertType']}"),
-                Text("📍 Location: ${data['alertLocation']}"),
-                Text("🏠 Caller Address: ${data['userAddress'] ?? "Not Provided"}"),
-                Text("👤 Reported By: ${data['userReported']}"),
-                Text("📌 Status: ${data['status']}"),
-                Text("🕒 Time: $time"),
-
-                const SizedBox(height: 15),
-                const Text(
-                  "Responders:",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-
-                ...((data["responders"] ?? []) as List)
-                    .map((r) => Text("- ${r["name"]} (${r["email"]})")),
-              ],
-            ),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Dispatch Details"),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("🔥 Alert: ${data['alertType']}"),
+              Text("📍 Contact: ${data['userContact']}"),
+              Text("🏠 Caller Address: ${data['userAddress'] ?? "Not Provided"}"),
+              Text("👤 Reported By: ${data['userReported']}"),
+              Text("📌 Status: ${data['status']}"),
+              Text("🕒 Time: $time"),
+              const SizedBox(height: 15),
+              const Text("Responders:", style: TextStyle(fontWeight: FontWeight.bold)),
+              ...((data["responders"] ?? []) as List)
+                  .map((r) => Text("- ${r["name"]} (${r["email"]})")),
+            ],
           ),
-          actions: [
-            TextButton(
-              child: const Text("Close"),
-              onPressed: () => Navigator.pop(context),
-            )
-          ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(
+            child: const Text("Close"),
+            onPressed: () => Navigator.pop(context),
+          )
+        ],
+      ),
     );
+  }
+
+  // 📅 Date Picker
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+    );
+
+    if (picked != null) {
+      setState(() => selectedDate = picked);
+    }
   }
 
   @override
@@ -77,30 +83,63 @@ class _DispatchPageState extends State<DispatchPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              /// Back Button
               InkWell(
                 onTap: () => Navigator.pop(context),
-                borderRadius: BorderRadius.circular(30),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(
-                    Icons.chevron_left,
-                    size: 30,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(Icons.chevron_left, size: 30),
                 ),
               ),
+
               const SizedBox(height: 10),
 
-              Text(
+              /// Title
+              const Text(
                 "Dispatches",
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
                   fontSize: 30,
                   fontWeight: FontWeight.bold,
+                  color: Colors.red,
                 ),
               ),
+
               const SizedBox(height: 20),
 
+              /// Search + Filter Row
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      decoration: InputDecoration(
+                        hintText: "Search...",
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onChanged: (value) {
+                        setState(() => searchQuery = value.toLowerCase());
+                      },
+                    ),
+                  ),
+
+                  const SizedBox(width: 10),
+
+                  ElevatedButton.icon(
+                    onPressed: _pickDate,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                    ),
+                    icon: const Icon(Icons.calendar_month, color: Colors.white),
+                    label: const Text("Filter Date", style: TextStyle(color: Colors.white)),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+
+              /// Table
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
@@ -109,31 +148,13 @@ class _DispatchPageState extends State<DispatchPage> {
                       .orderBy('timestamp', descending: true)
                       .snapshots(),
                   builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
+                    if (!snapshot.hasData) {
                       return const Center(child: CircularProgressIndicator());
-                    }
-
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          "⚠️ Firestore Error:\n${snapshot.error}",
-                          style: const TextStyle(color: Colors.red),
-                          textAlign: TextAlign.center,
-                        ),
-                      );
-                    }
-
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return const Center(
-                        child: Text(
-                          "No active dispatches yet.",
-                          style: TextStyle(color: Colors.grey, fontSize: 16),
-                        ),
-                      );
                     }
 
                     final docs = snapshot.data!.docs;
 
+                    /// New Dispatch Notification
                     if (_prevCount < docs.length) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -146,132 +167,151 @@ class _DispatchPageState extends State<DispatchPage> {
                     }
                     _prevCount = docs.length;
 
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (context, index) {
-                        final data = docs[index].data() as Map<String, dynamic>;
+                    /// Search + Date Filter
+                    final filtered = docs.where((d) {
+                      final data = d.data() as Map<String, dynamic>;
+                      final search = searchQuery;
 
-                        final String status = data["status"] ?? "Unknown";
-                        final List<dynamic> responders =
-                            data["responders"] ?? [];
+                      final matchSearch =
+                          data["alertType"].toString().toLowerCase().contains(search) ||
+                          data["alertLocation"].toString().toLowerCase().contains(search) ||
+                          data["userReported"].toString().toLowerCase().contains(search) ||
+                          data["status"].toString().toLowerCase().contains(search);
 
-                        final myResponder =
-                            responders.firstWhere(
-                              (r) => r["email"] == currentEmail,
-                              orElse: () => null,
-                            );
+                      if (selectedDate != null) {
+                        final date = (data["timestamp"] as Timestamp).toDate();
+                        final sameDay =
+                            date.year == selectedDate!.year &&
+                            date.month == selectedDate!.month &&
+                            date.day == selectedDate!.day;
+                        return matchSearch && sameDay;
+                      }
 
-                        String formattedTime = "N/A";
-                        if (data["timestamp"] is Timestamp) {
-                          final ts = (data["timestamp"] as Timestamp).toDate();
-                          formattedTime =
-                              "${ts.year}-${ts.month}-${ts.day}  ${ts.hour}:${ts.minute.toString().padLeft(2, '0')}";
-                        }
+                      return matchSearch;
+                    }).toList();
 
-                        Color statusColor = Colors.orange;
-                        if (status == "Resolved") statusColor = Colors.green;
-                        if (status == "Dispatched") statusColor = Colors.redAccent;
+                    if (filtered.isEmpty) {
+                      return const Center(child: Text("No dispatch found."));
+                    }
 
-                        // ===========================
-                        // 🔥 CARD WITH TAP → MODAL
-                        // ===========================
-                        return GestureDetector(
-                          onTap: () => _openDetailsModal(data),
-                          child: Card(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            elevation: 4,
-                            margin: const EdgeInsets.only(bottom: 16),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(
-                                    Icons.local_fire_department,
-                                    color: Color(0xFFA30000),
-                                    size: 36,
-                                  ),
-                                  const SizedBox(width: 12),
+return Expanded(
+  child: Scrollbar(
+    thumbVisibility: true,
+    child: SingleChildScrollView(
+      scrollDirection: Axis.vertical, // 👈 vertical scroll
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal, // 👈 horizontal scroll
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: 1500, // prevents wide blank space
+          ),
+          child: DataTable(
+            showCheckboxColumn: false,
+            headingRowHeight: 45,
+            dataRowHeight: 55,
+            horizontalMargin: 12,
+            columnSpacing: 20,
 
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          data["alertType"] ?? "Fire Alert",
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 17,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
+            columns: const [
+              DataColumn(label: Text("Alert")),
+              DataColumn(label: Text("Reporter")),
+              DataColumn(label: Text("Contact")),
+              DataColumn(label: Text("Address")),
+              DataColumn(label: Text("Time")),
+              DataColumn(label: Text("Status")),
+            ],
 
-                                        Text(
-                                          "Location: ${data["alertLocation"] ?? "Unknown"}",
-                                          style: TextStyle(
-                                            color: Colors.grey[700],
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
+           rows: filtered.map((doc) {
+  final data = doc.data() as Map<String, dynamic>;
+  final ts = (data["timestamp"] as Timestamp).toDate();
 
-                                        Text(
-                                          "Reported by: ${data["userReported"] ?? "Unknown"}",
-                                          style: TextStyle(
-                                            color: Colors.grey[700],
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
+  final formattedTime =
+      "${ts.year}-${ts.month.toString().padLeft(2, '0')}-"
+      "${ts.day.toString().padLeft(2, '0')} "
+      "${ts.hour.toString().padLeft(2, '0')}:"
+      "${ts.minute.toString().padLeft(2, '0')}";
 
-                                        Text(
-                                          "You: ${myResponder?["name"] ?? "Responder"}",
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w500,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
+  Color statusColor =
+      data["status"] == "Resolved" ? Colors.green : Colors.redAccent;
 
-                                        Text(
-                                          "Time: $formattedTime",
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            color: Colors.grey,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 10),
+  return DataRow(
+    onSelectChanged: (_) => _openDetailsModal(data),
+    cells: [
+      // ALERT
+      DataCell(
+        SizedBox(
+          width: 150,
+          child: Text(data["alertType"], overflow: TextOverflow.ellipsis),
+        ),
+      ),
 
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 4, horizontal: 10),
-                                          decoration: BoxDecoration(
-                                            color: statusColor.withOpacity(0.15),
-                                            borderRadius:
-                                                BorderRadius.circular(12),
-                                          ),
-                                          child: Text(
-                                            status,
-                                            style: TextStyle(
-                                              color: statusColor,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
+      // REPORTER (✔ correct)
+      DataCell(
+        SizedBox(
+          width: 120,
+          child: Text(data["userReported"], overflow: TextOverflow.ellipsis),
+        ),
+      ),
+
+      // CONTACT (✔ FIXED)
+      DataCell(
+        SizedBox(
+          width: 120,
+          child: Text(data["userContact"], overflow: TextOverflow.ellipsis),
+        ),
+      ),
+
+      // ADDRESS
+      DataCell(
+        SizedBox(
+          width: 220,
+          child: Text(data["userAddress"] ?? "N/A",
+              overflow: TextOverflow.ellipsis),
+        ),
+      ),
+
+      // TIME
+      DataCell(
+        SizedBox(
+          width: 170,
+          child: Text(formattedTime, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+
+      // STATUS
+      DataCell(
+        SizedBox(
+          width: 120,
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              data["status"],
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: statusColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}).toList(),
+
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+
                   },
                 ),
               ),
@@ -281,4 +321,4 @@ class _DispatchPageState extends State<DispatchPage> {
       ),
     );
   }
-}
+} 
