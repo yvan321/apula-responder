@@ -33,6 +33,9 @@ class _HomePageState extends State<HomePage> {
   bool _showAlertModal = false;
   Map<String, dynamic>? _alertData;
 
+  // 🔥 Responder Availability
+  String _responderStatus = "Available";
+
   @override
   void initState() {
     super.initState();
@@ -40,16 +43,104 @@ class _HomePageState extends State<HomePage> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
     _listenToDispatchStatus();
     _loadRecentAlerts();
+    _getResponderStatus();
   }
 
+  // ---------------------------------------------------------------
+  // 🔥 Load Responder Status (emailLower → fallback email)
+  // ---------------------------------------------------------------
+  Future<void> _getResponderStatus() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      QuerySnapshot snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .limit(1)
+          .get();
+
+      // if user does not have emailLower in Firestore
+      if (snap.docs.isEmpty) {
+        snap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email)
+            .limit(1)
+            .get();
+      }
+
+      if (snap.docs.isNotEmpty) {
+        final docData = snap.docs.first.data() as Map<String, dynamic>;
+        setState(() {
+          _responderStatus = docData['status'] ?? "Available";
+        });
+      } else {
+        _responderStatus = "Available";
+      }
+    } catch (e) {
+      debugPrint("Error status load: $e");
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 🔥 Toggle Responder Status (emailLower → fallback email)
+  // ---------------------------------------------------------------
+  Future<void> _toggleResponderStatus() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    String newStatus =
+        _responderStatus == "Available" ? "Unavailable" : "Available";
+
+    try {
+      QuerySnapshot snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .limit(1)
+          .get();
+
+      if (snap.docs.isEmpty) {
+        snap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email)
+            .limit(1)
+            .get();
+      }
+
+      if (snap.docs.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("User document not found.")),
+        );
+        return;
+      }
+
+      final docId = snap.docs.first.id;
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(docId)
+          .update({'status': newStatus});
+
+      setState(() => _responderStatus = newStatus);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Status updated to $newStatus")),
+      );
+    } catch (e) {
+      debugPrint("Status toggle error: $e");
+    }
+  }
+
+  // ---------------------------------------------------------------
   // 🔥 REAL-TIME DISPATCH LISTENER
+  // ---------------------------------------------------------------
   void _listenToDispatchStatus() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     final dispatchRef = FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email?.toLowerCase())
+        .where('responderEmails', arrayContains: user.email!.toLowerCase())
         .orderBy('timestamp', descending: true)
         .limit(1);
 
@@ -57,7 +148,7 @@ class _HomePageState extends State<HomePage> {
       if (snapshot.docs.isEmpty) {
         setState(() {
           _dispatchStatus = "No Active Dispatch 🔒";
-          _dispatchLocation = "";
+          _callerAddress = "";
         });
       } else {
         final data = snapshot.docs.first.data();
@@ -69,7 +160,9 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  // ---------------------------------------------------------------
   // 🔥 Load Recent Alerts
+  // ---------------------------------------------------------------
   Future<void> _loadRecentAlerts() async {
     final query = await FirebaseFirestore.instance
         .collection('alerts')
@@ -88,87 +181,7 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // 🔍 VIEW ALERT DETAILS (FULL MODAL)
-  void _openAlertDetails() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final query = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email?.toLowerCase())
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) return;
-
-    final data = query.docs.first.data();
-    final alertId = data["alertId"];
-    if (alertId == null) return;
-
-    final alertSnap =
-        await FirebaseFirestore.instance.collection("alerts").doc(alertId).get();
-
-    if (!alertSnap.exists) return;
-
-    setState(() {
-      _alertData = alertSnap.data();
-      _showAlertModal = true;
-    });
-  }
-
-  // 🔥 MARK AS RESOLVED
-  void _markAsResolved() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final query = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email?.toLowerCase())
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) return;
-
-    final dispatchDoc = query.docs.first;
-    final dispatchId = dispatchDoc.id;
-    final data = dispatchDoc.data();
-
-    final alertId = data["alertId"];
-    final responders = data["responders"] as List<dynamic>;
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('dispatches')
-          .doc(dispatchId)
-          .update({'status': 'Resolved'});
-
-      if (alertId != null) {
-        await FirebaseFirestore.instance
-            .collection('alerts')
-            .doc(alertId)
-            .update({'status': 'Resolved'});
-      }
-
-      for (var r in responders) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(r["id"])
-            .update({'status': 'Available'});
-      }
-
-      setState(() => _dispatchStatus = "Resolved");
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Dispatch resolved.")),
-      );
-    } catch (e) {
-      debugPrint("Error: $e");
-    }
-  }
-
-  // TIME + DATE
+  // TIME & DATE
   void _updateTime() {
     final now = DateTime.now();
     final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
@@ -199,6 +212,9 @@ class _HomePageState extends State<HomePage> {
 
   void _onItemTapped(int index) => setState(() => _selectedIndex = index);
 
+  // ---------------------------------------------------------------
+  //                     MAIN UI STARTS HERE
+  // ---------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -222,7 +238,6 @@ class _HomePageState extends State<HomePage> {
               title: Row(
                 children: [
                   Image.asset("assets/logo.png", height: 40),
-                  const SizedBox(width: 8),
                 ],
               ),
             )
@@ -246,7 +261,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== HOME UI ======================
+  // ---------------------------------------------------------------
+  // Dashboard UI
+  // ---------------------------------------------------------------
   Widget _buildDashboard(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -264,12 +281,11 @@ class _HomePageState extends State<HomePage> {
             children: [
               Expanded(child: _buildTimeCard()),
               const SizedBox(width: 12),
-              Expanded(child: _buildLocationCard()),
+              Expanded(child: _buildStatusCard()),
             ],
           ),
 
           const SizedBox(height: 20),
-
           const Text("Recent Fire Incidents",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
@@ -286,7 +302,85 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== NEW INCIDENT CARD ======================
+  // ---------------------------------------------------------------
+  // Status Toggle Card
+  // ---------------------------------------------------------------
+  Widget _buildStatusCard() {
+    bool isAvailable = _responderStatus == "Available";
+
+    return InkWell(
+      onTap: _toggleResponderStatus,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: isAvailable
+                ? [Colors.green, Colors.greenAccent]
+                : [Colors.red, Colors.redAccent],
+          ),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              isAvailable ? Icons.check_circle : Icons.cancel,
+              color: Colors.white,
+              size: 28,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isAvailable ? "Available" : "Unavailable",
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              "Tap to change",
+              style: TextStyle(color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------
+  // Time Card UI
+  // ---------------------------------------------------------------
+  Widget _buildTimeCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+              colors: _isDay
+                  ? [Colors.yellow.shade200, Colors.orange.shade300]
+                  : [Colors.indigo.shade700, Colors.indigo.shade900]),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(_isDay ? Icons.wb_sunny : Icons.nightlight_round,
+                color: _isDay ? Colors.black : Colors.white, size: 28),
+            const SizedBox(height: 8),
+            Text(_time,
+                style: TextStyle(
+                    color: _isDay ? Colors.black : Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold)),
+            Text(_date,
+                style: TextStyle(
+                    color: (_isDay ? Colors.black : Colors.white)
+                        .withOpacity(0.7))),
+          ],
+        ),
+      );
+
+  // ---------------------------------------------------------------
+  // Recent Alerts UI
+  // ---------------------------------------------------------------
   Widget _recentIncidentCard(Map<String, dynamic> alert) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -302,7 +396,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== VIEW MODAL (NO DESCRIPTION / NO READ) ======================
+  // ---------------------------------------------------------------
+  // Modal for viewing alert details
+  // ---------------------------------------------------------------
   void _openAlertViewModal(Map<String, dynamic> alert) {
     showDialog(
       context: context,
@@ -350,7 +446,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== DISPATCH STATUS CARD ======================
+  // ---------------------------------------------------------------
+  // Dispatch Status Card UI
+  // ---------------------------------------------------------------
   Widget _buildDispatchStatusCard() {
     Color startColor, endColor;
     IconData icon;
@@ -417,7 +515,95 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ====================== ALERT MODAL USED FOR DISPATCH ======================
+  // ---------------------------------------------------------------
+  // View Dispatch Details
+  // ---------------------------------------------------------------
+  void _openAlertDetails() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmails', arrayContains: user.email!.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final data = query.docs.first.data();
+    final alertId = data["alertId"];
+    if (alertId == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection("alerts")
+        .doc(alertId)
+        .get();
+
+    if (!snap.exists) return;
+
+    setState(() {
+      _alertData = snap.data();
+      _showAlertModal = true;
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // MARK DISPATCH AS RESOLVED
+  // ---------------------------------------------------------------
+  void _markAsResolved() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmails', arrayContains: user.email!.toLowerCase())
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final dispatchDoc = query.docs.first;
+    final dispatchId = dispatchDoc.id;
+    final data = dispatchDoc.data();
+
+    final alertId = data["alertId"];
+    final responders = data["responders"] as List<dynamic>;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('dispatches')
+          .doc(dispatchId)
+          .update({'status': 'Resolved'});
+
+      if (alertId != null) {
+        await FirebaseFirestore.instance
+            .collection('alerts')
+            .doc(alertId)
+            .update({'status': 'Resolved'});
+      }
+
+      for (var r in responders) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(r["id"])
+            .update({'status': 'Available'});
+      }
+
+      setState(() => _dispatchStatus = "Resolved");
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Dispatch resolved.")),
+      );
+    } catch (e) {
+      debugPrint("Error: $e");
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Alert Details Modal
+  // ---------------------------------------------------------------
   Widget _alertDetailsModal() {
     if (_alertData == null) return const SizedBox();
 
@@ -469,80 +655,4 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-
-  // ====================== OTHER UI WIDGETS ======================
-  Widget _buildTimeCard() => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-              colors: _isDay
-                  ? [Colors.yellow.shade200, Colors.orange.shade300]
-                  : [Colors.indigo.shade700, Colors.indigo.shade900]),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(_isDay ? Icons.wb_sunny : Icons.nightlight_round,
-                color: _isDay ? Colors.black : Colors.white, size: 28),
-            const SizedBox(height: 8),
-            Text(_time,
-                style: TextStyle(
-                    color: _isDay ? Colors.black : Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold)),
-            Text(_date,
-                style: TextStyle(
-                    color: (_isDay ? Colors.black : Colors.white)
-                        .withOpacity(0.7))),
-          ],
-        ),
-      );
-
-  Widget _buildLocationCard() => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-              colors: [Colors.teal, Colors.tealAccent],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.location_on, color: Colors.white, size: 28),
-            SizedBox(height: 8),
-            Text("Main BFP",
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold)),
-            Text("Bacoor City",
-                style: TextStyle(color: Colors.white70, fontSize: 14)),
-          ],
-        ),
-      );
-
-  Widget _incidentCard(String title, String time, String status) => Card(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: ListTile(
-          leading: const Icon(Icons.local_fire_department, color: Colors.red),
-          title: Text(title),
-          subtitle: Text(time),
-          trailing: Text(status,
-              style: TextStyle(
-                  color: status == "Resolved" ? Colors.green : Colors.orange,
-                  fontWeight: FontWeight.bold)),
-        ),
-      );
-
-  Widget _reportItem(String title, String time) => Card(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: ListTile(
-          leading: const Icon(Icons.announcement, color: Colors.blue),
-          title: Text(title),
-          subtitle: Text(time),
-        ),
-      );
 }
