@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:apula_responder/screens/register/map_picker.dart';
 
 class AccountSettingsPage extends StatefulWidget {
   const AccountSettingsPage({super.key});
@@ -18,7 +19,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   final _confirmPasswordController = TextEditingController();
 
   bool _isLoading = true;
-  String? _docId; // the Firestore document id for this user
+  String? _docId;
+
+  double? selectedLat;
+  double? selectedLng;
 
   @override
   void initState() {
@@ -26,7 +30,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     _loadUserData();
   }
 
-  // 🔥 Load Firestore document based on user's email
   Future<void> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -45,6 +48,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
         _nameController.text = doc["name"] ?? "";
         _contactController.text = doc["contact"] ?? "";
         _stationController.text = doc["address"] ?? "";
+        selectedLat = doc["latitude"];
+        selectedLng = doc["longitude"];
         _isLoading = false;
       });
     } else {
@@ -52,7 +57,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     }
   }
 
-  // 🔥 Save data
   Future<void> _saveChanges() async {
     final name = _nameController.text.trim();
     final contact = _contactController.text.trim();
@@ -77,16 +81,17 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
 
     try {
-      // 🔥 Update Firestore fields
       if (_docId != null) {
         await FirebaseFirestore.instance.collection("users").doc(_docId).update({
           "name": name,
           "contact": contact,
           "address": station,
+          "latitude": selectedLat,
+          "longitude": selectedLng,
+            "updatedAt": FieldValue.serverTimestamp(),   // ✅ ADDED
         });
       }
 
-      // 🔥 Update password (optional)
       if (pass.isNotEmpty) {
         await FirebaseAuth.instance.currentUser!.updatePassword(pass);
       }
@@ -109,7 +114,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
   }
 
-  Widget _loadingDialog(String message) {
+  Widget _loadingDialog(String msg) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       content: Column(
@@ -118,7 +123,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           Lottie.asset('assets/fireloading.json', width: 130, height: 130),
           const SizedBox(height: 20),
           Text(
-            message,
+            msg,
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Color(0xFFA30000),
@@ -131,7 +136,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
   }
 
-  void _showSuccessDialog(String message) {
+  void _showSuccessDialog(String msg) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -140,16 +145,16 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           Navigator.pop(context);
           Navigator.pop(context);
         });
+
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Lottie.asset('assets/check orange.json',
-                  width: 150, height: 150, repeat: false),
+              Lottie.asset('assets/check orange.json', width: 150, height: 150, repeat: false),
               const SizedBox(height: 20),
               Text(
-                message,
+                msg,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 18,
@@ -171,19 +176,15 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     return Scaffold(
       body: SafeArea(
         child: _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: redColor),
-              )
+            ? const Center(child: CircularProgressIndicator(color: redColor))
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Back Button
                   Padding(
                     padding: const EdgeInsets.only(left: 10, top: 10),
                     child: InkWell(
                       onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.chevron_left,
-                          size: 30, color: redColor),
+                      child: const Icon(Icons.chevron_left, size: 30, color: redColor),
                     ),
                   ),
 
@@ -217,10 +218,33 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                             ),
                             const SizedBox(height: 20),
 
+                            // ⭐ MAP PICKER HERE
                             TextField(
                               controller: _stationController,
-                              decoration: _input("Address"),
+                              readOnly: true,
+                              decoration: _input("Address").copyWith(
+                                suffixIcon: const Icon(Icons.map),
+                              ),
+                              onTap: () async {
+                                final result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => MapPickerScreen(
+                                      initialAddress: _stationController.text,
+                                    ),
+                                  ),
+                                );
+
+                                if (result != null && result is Map<String, dynamic>) {
+                                  setState(() {
+                                    _stationController.text = result["address"];
+                                    selectedLat = result["lat"];
+                                    selectedLng = result["lng"];
+                                  });
+                                }
+                              },
                             ),
+
                             const SizedBox(height: 20),
 
                             TextField(

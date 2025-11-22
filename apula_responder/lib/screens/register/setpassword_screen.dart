@@ -72,7 +72,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
       if (userQuery.docs.isNotEmpty) {
         final userDoc = userQuery.docs.first.reference;
         await userDoc.update({
-          'password': password,
+          
           'verified': true,
           'verificationCode': FieldValue.delete(),
         });
