@@ -1,3 +1,4 @@
+// lib/screens/app/home/home_page.dart
 import 'dart:async';
 import 'package:apula_responder/screens/app/dispatch/dispatch_page.dart';
 import 'package:apula_responder/screens/app/notifications/notification_page.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:apula_responder/widgets/custom_bottom_nav.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -60,7 +62,7 @@ class _HomePageState extends State<HomePage> {
           .limit(1)
           .get();
 
-      // if user does not have emailLower in Firestore
+      // fallback if no emailLower
       if (snap.docs.isEmpty) {
         snap = await FirebaseFirestore.instance
             .collection('users')
@@ -397,7 +399,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // Modal for viewing alert details
+  // Modal for viewing alert details (quick open from Recent list)
   // ---------------------------------------------------------------
   void _openAlertViewModal(Map<String, dynamic> alert) {
     showDialog(
@@ -423,6 +425,11 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 12),
 
+              if (alert['userLatitude'] != null && alert['userLongitude'] != null)
+                Text("Coordinates: ${alert['userLatitude']}, ${alert['userLongitude']}"),
+
+              const SizedBox(height: 12),
+
               const Text("🕒 Timestamp:",
                   style: TextStyle(fontWeight: FontWeight.bold)),
               Text(alert['timestamp'] != null
@@ -432,12 +439,30 @@ class _HomePageState extends State<HomePage> {
                   : "N/A"),
 
               const SizedBox(height: 20),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Close"),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // Navigate button if coordinates exist on alert
+                  if (alert['userLatitude'] != null && alert['userLongitude'] != null)
+                    ElevatedButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        // Try to open direct navigation from responder to alert caller
+                        await _openNavigationToAlert(
+                          alertLat: (alert['userLatitude'] as num).toDouble(),
+                          alertLng: (alert['userLongitude'] as num).toDouble(),
+                        );
+                      },
+                      child: const Text("Navigate"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("Close"),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+                  ),
+                ],
               ),
             ],
           ),
@@ -447,7 +472,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // Dispatch Status Card UI
+  // DISPATCH Status Card UI
   // ---------------------------------------------------------------
   Widget _buildDispatchStatusCard() {
     Color startColor, endColor;
@@ -516,7 +541,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // View Dispatch Details
+  // View Dispatch Details (opens alert doc and shows modal)
   // ---------------------------------------------------------------
   void _openAlertDetails() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -602,10 +627,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // Alert Details Modal
+  // Alert Details Modal (for responder to view currently assigned alert)
   // ---------------------------------------------------------------
   Widget _alertDetailsModal() {
     if (_alertData == null) return const SizedBox();
+
+    final a = _alertData!;
+    final userLat = (a['userLatitude'] is num) ? (a['userLatitude'] as num).toDouble() : null;
+    final userLng = (a['userLongitude'] is num) ? (a['userLongitude'] as num).toDouble() : null;
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -620,39 +649,135 @@ class _HomePageState extends State<HomePage> {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
 
-              Text("Type: ${_alertData!['type'] ?? 'Unknown'}"),
-              Text("Location: ${_alertData!['location'] ?? 'Unknown'}"),
-              Text("Status: ${_alertData!['status'] ?? 'Unknown'}"),
+              Text("Type: ${a['type'] ?? 'Unknown'}"),
+              Text("Location: ${a['location'] ?? 'Unknown'}"),
+              Text("Status: ${a['status'] ?? 'Unknown'}"),
 
               const SizedBox(height: 12),
               const Text("👤 Reporter:",
                   style: TextStyle(fontWeight: FontWeight.bold)),
-              Text("Name: ${_alertData!['userName'] ?? 'N/A'}"),
-              Text("Contact: ${_alertData!['userContact'] ?? 'N/A'}"),
-              Text("Address: ${_alertData!['userAddress'] ?? 'N/A'}"),
+              Text("Name: ${a['userName'] ?? 'N/A'}"),
+              Text("Contact: ${a['userContact'] ?? 'N/A'}"),
+              Text("Address: ${a['userAddress'] ?? 'N/A'}"),
+
+              if (userLat != null && userLng != null) ...[
+                const SizedBox(height: 8),
+                Text("Coordinates: $userLat, $userLng"),
+              ],
 
               const SizedBox(height: 12),
 
               const Text("🕒 Date & Time:",
                   style: TextStyle(fontWeight: FontWeight.bold)),
-              Text(_alertData!['timestamp'] != null
+              Text(a['timestamp'] != null
                   ? DateTime.fromMillisecondsSinceEpoch(
-                          _alertData!['timestamp'].seconds * 1000)
+                          a['timestamp'].seconds * 1000)
                       .toString()
                   : "N/A"),
 
               const SizedBox(height: 20),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Close"),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (userLat != null && userLng != null)
+                    ElevatedButton(
+                      onPressed: () async {
+                        // Launch navigation using responder's latest location (from users doc) to the alert coords
+                        await _openNavigationToAlert(alertLat: userLat, alertLng: userLng);
+                      },
+                      child: const Text("Navigate"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                    ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
+                    child: const Text("Close"),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+                  ),
+                ],
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  // ---------------------------------------------------------------
+  // NAVIGATION: find responder current coords then open external maps directions
+  // ---------------------------------------------------------------
+  Future<void> _openNavigationToAlert({
+    required double alertLat,
+    required double alertLng,
+  }) async {
+    // 1) get responder's own coordinates from users collection
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("User not logged in")),
+      );
+      return;
+    }
+
+    try {
+      QuerySnapshot snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .limit(1)
+          .get();
+
+      if (snap.docs.isEmpty) {
+        snap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email)
+            .limit(1)
+            .get();
+      }
+
+      if (snap.docs.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Responder record not found in DB.")),
+        );
+        return;
+      }
+
+      final doc = snap.docs.first.data() as Map<String, dynamic>;
+      final resLat = (doc['latitude'] is num) ? (doc['latitude'] as num).toDouble() : null;
+      final resLng = (doc['longitude'] is num) ? (doc['longitude'] as num).toDouble() : null;
+
+      if (resLat == null || resLng == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Responder coordinates missing.")),
+        );
+        return;
+      }
+
+      await _launchMapsDirections(originLat: resLat, originLng: resLng, destLat: alertLat, destLng: alertLng);
+    } catch (e) {
+      debugPrint("Navigation error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open navigation.")),
+      );
+    }
+  }
+
+  // Build Maps directions URI and launch external app / browser.
+  Future<void> _launchMapsDirections({
+    required double originLat,
+    required double originLng,
+    required double destLat,
+    required double destLng,
+  }) async {
+    // Use Google Maps directions link (works in browser & Android/iOS)
+    final url = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&origin=$originLat,$originLng&destination=$destLat,$destLng&travelmode=driving');
+
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open maps.")),
+      );
+    }
   }
 }
