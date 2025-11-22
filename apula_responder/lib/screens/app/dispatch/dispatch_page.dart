@@ -213,7 +213,7 @@ return Expanded(
             columnSpacing: 20,
 
             columns: const [
-              DataColumn(label: Text("Alert")),
+
               DataColumn(label: Text("Reporter")),
               DataColumn(label: Text("Contact")),
               DataColumn(label: Text("Address")),
@@ -221,7 +221,7 @@ return Expanded(
               DataColumn(label: Text("Status")),
             ],
 
-           rows: filtered.map((doc) {
+         rows: filtered.map((doc) {
   final data = doc.data() as Map<String, dynamic>;
   final ts = (data["timestamp"] as Timestamp).toDate();
 
@@ -237,15 +237,7 @@ return Expanded(
   return DataRow(
     onSelectChanged: (_) => _openDetailsModal(data),
     cells: [
-      // ALERT
-      DataCell(
-        SizedBox(
-          width: 150,
-          child: Text(data["alertType"], overflow: TextOverflow.ellipsis),
-        ),
-      ),
-
-      // REPORTER (✔ correct)
+      /// REPORTER
       DataCell(
         SizedBox(
           width: 120,
@@ -253,7 +245,7 @@ return Expanded(
         ),
       ),
 
-      // CONTACT (✔ FIXED)
+      /// CONTACT
       DataCell(
         SizedBox(
           width: 120,
@@ -261,7 +253,7 @@ return Expanded(
         ),
       ),
 
-      // ADDRESS
+      /// ADDRESS
       DataCell(
         SizedBox(
           width: 220,
@@ -270,7 +262,7 @@ return Expanded(
         ),
       ),
 
-      // TIME
+      /// TIME
       DataCell(
         SizedBox(
           width: 170,
@@ -278,13 +270,12 @@ return Expanded(
         ),
       ),
 
-      // STATUS
+      /// STATUS
       DataCell(
         SizedBox(
           width: 120,
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: statusColor.withOpacity(0.18),
               borderRadius: BorderRadius.circular(12),
@@ -303,6 +294,8 @@ return Expanded(
     ],
   );
 }).toList(),
+
+
 
           ),
         ),
