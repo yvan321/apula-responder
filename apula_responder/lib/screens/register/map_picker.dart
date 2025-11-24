@@ -5,10 +5,9 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 class MapPickerScreen extends StatefulWidget {
-  final String? initialAddress;   // <-- FIXED
+  final String? initialAddress;
 
-  const MapPickerScreen({super.key, this.initialAddress});   // <-- FIXED
-
+  const MapPickerScreen({super.key, this.initialAddress});
 
   @override
   State<MapPickerScreen> createState() => _MapPickerScreenState();
@@ -97,9 +96,18 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Pick Location"),
         backgroundColor: const Color(0xFFA30000),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.chevron_left, size: 32, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          "Pick Location",
+          style: TextStyle(color: Colors.white),
+        ),
       ),
+
       body: Stack(
         children: [
           FlutterMap(
@@ -140,8 +148,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                       hintText: "Search address...",
                       filled: true,
                       fillColor: Colors.white,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 12),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -162,7 +169,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
           ),
 
           Positioned(
-            bottom: 80,
+            bottom: 120,
             left: 20,
             right: 20,
             child: Container(
@@ -180,7 +187,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
           ),
 
           Positioned(
-            bottom: 20,
+            bottom:50,
             left: 20,
             right: 20,
             child: ElevatedButton(
