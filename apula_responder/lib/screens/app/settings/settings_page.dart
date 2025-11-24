@@ -46,6 +46,25 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+
+  Future<void> _logout() async {
+  try {
+    await FirebaseAuth.instance.signOut();
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      '/login', // make sure your login route is named '/login'
+      (route) => false,
+    );
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Logout failed: $e")),
+    );
+  }
+}
+
+
   @override
   Widget build(BuildContext context) {
     const redColor = Color(0xFFA30000);
@@ -168,11 +187,31 @@ class _SettingsPageState extends State<SettingsPage> {
                               },
                             ),
                             _buildSettingsTile(
-                              Icons.logout,
-                              "Log Out",
-                              onTap: () =>
-                                  _showSnack("Logged out successfully."),
-                            ),
+  Icons.logout,
+  "Log Out",
+  onTap: () {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Confirm Logout"),
+        content: const Text("Are you sure you want to log out?"),
+        actions: [
+          TextButton(
+            child: const Text("Cancel"),
+            onPressed: () => Navigator.pop(context),
+          ),
+          TextButton(
+            child: const Text("Logout"),
+            onPressed: () {
+              Navigator.pop(context); // close dialog
+              _logout(); // call your function
+            },
+          ),
+        ],
+      ),
+    );
+  },
+),
                           ],
                         ),
                       ),
