@@ -24,7 +24,6 @@ class _HomePageState extends State<HomePage> {
 
   // 🔥 Dispatch Tracking
   String _dispatchStatus = "Loading...";
-  String _dispatchLocation = "";
   StreamSubscription? _dispatchSub;
   String _callerAddress = "";
 
@@ -49,7 +48,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // 🔥 Load Responder Status (emailLower → fallback email)
+  // 🔥 Load Responder Status (uses EXACT email)
   // ---------------------------------------------------------------
   Future<void> _getResponderStatus() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -58,60 +57,55 @@ class _HomePageState extends State<HomePage> {
     try {
       QuerySnapshot snap = await FirebaseFirestore.instance
           .collection('users')
-          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .where('email', isEqualTo: user.email)
           .limit(1)
           .get();
 
-      // fallback if no emailLower
-      if (snap.docs.isEmpty) {
-        snap = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: user.email)
-            .limit(1)
-            .get();
-      }
-
       if (snap.docs.isNotEmpty) {
-        final docData = snap.docs.first.data() as Map<String, dynamic>;
+        final data = snap.docs.first.data() as Map<String, dynamic>;
         setState(() {
-          _responderStatus = docData['status'] ?? "Available";
+          _responderStatus = data['status'] ?? "Available";
         });
-      } else {
-        _responderStatus = "Available";
       }
     } catch (e) {
-      debugPrint("Error status load: $e");
+      debugPrint("Status load error: $e");
     }
   }
 
   // ---------------------------------------------------------------
-  // 🔥 Toggle Responder Status (emailLower → fallback email)
+  // 🔥 Toggle Responder Status
   // ---------------------------------------------------------------
   Future<void> _toggleResponderStatus() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    String newStatus =
-        _responderStatus == "Available" ? "Unavailable" : "Available";
+ String newStatus;
+
+if (_responderStatus == "Available") {
+  newStatus = "Unavailable";
+} else if (_responderStatus == "Unavailable") {
+  newStatus = "Available";
+} else if (_responderStatus == "Dispatched") {
+  // DO NOT CHANGE STATUS WHEN DISPATCHED
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text("Cannot change status while dispatched.")),
+  );
+  return;
+} else {
+  newStatus = "Unavailable";
+}
+
 
     try {
       QuerySnapshot snap = await FirebaseFirestore.instance
           .collection('users')
-          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .where('email', isEqualTo: user.email)
           .limit(1)
           .get();
 
       if (snap.docs.isEmpty) {
-        snap = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: user.email)
-            .limit(1)
-            .get();
-      }
-
-      if (snap.docs.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("User document not found.")),
+          const SnackBar(content: Text("User doc not found.")),
         );
         return;
       }
@@ -124,10 +118,6 @@ class _HomePageState extends State<HomePage> {
           .update({'status': newStatus});
 
       setState(() => _responderStatus = newStatus);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Status updated to $newStatus")),
-      );
     } catch (e) {
       debugPrint("Status toggle error: $e");
     }
@@ -136,31 +126,63 @@ class _HomePageState extends State<HomePage> {
   // ---------------------------------------------------------------
   // 🔥 REAL-TIME DISPATCH LISTENER
   // ---------------------------------------------------------------
-  void _listenToDispatchStatus() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+ void _listenToDispatchStatus() {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    final dispatchRef = FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email!.toLowerCase())
-        .orderBy('timestamp', descending: true)
-        .limit(1);
+  final dispatchRef = FirebaseFirestore.instance
+      .collection('dispatches')
+      .where('responderEmails', arrayContains: user.email)
+      .orderBy('timestamp', descending: true)
+      .limit(1);
 
-    _dispatchSub = dispatchRef.snapshots().listen((snapshot) {
-      if (snapshot.docs.isEmpty) {
-        setState(() {
-          _dispatchStatus = "No Active Dispatch 🔒";
-          _callerAddress = "";
-        });
-      } else {
-        final data = snapshot.docs.first.data();
-        setState(() {
-          _dispatchStatus = data['status'] ?? "Unknown";
-          _callerAddress = data['userAddress'] ?? "";
-        });
+  _dispatchSub = dispatchRef.snapshots().listen((snapshot) async {
+    if (snapshot.docs.isEmpty) {
+      // No dispatch → ensure responder is Available (unless manually Unavailable)
+      if (_responderStatus != "Unavailable") {
+        await _updateUserStatus("Available");
       }
+
+      setState(() {
+        _dispatchStatus = "No Active Dispatch 🔒";
+        _callerAddress = "";
+      });
+
+      return;
+    }
+
+    // There IS a dispatch
+    final data = snapshot.docs.first.data();
+    final status = data["status"];
+    final address = data["userAddress"] ?? "";
+
+    setState(() {
+      _dispatchStatus = status;
+      _callerAddress = address;
     });
-  }
+
+    // UPDATE UI & Firestore BASED ON DISPATCH STATUS
+    if (status == "Dispatched") {
+      // Only set if not already dispatched
+      if (_responderStatus != "Dispatched") {
+        await _updateUserStatus("Dispatched");
+      }
+    }
+
+    if (status == "Resolved") {
+      // Automatically return responder to Available
+      if (_responderStatus != "Unavailable") {
+        await _updateUserStatus("Available");
+      }
+
+      // And show UI
+      setState(() {
+        _dispatchStatus = "Resolved";
+      });
+    }
+  });
+}
+
 
   // ---------------------------------------------------------------
   // 🔥 Load Recent Alerts
@@ -206,6 +228,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
+  
+  
   void dispose() {
     _timer?.cancel();
     _dispatchSub?.cancel();
@@ -213,6 +237,35 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onItemTapped(int index) => setState(() => _selectedIndex = index);
+
+  Future<void> _updateUserStatus(String newStatus) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+    QuerySnapshot snap = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (snap.docs.isEmpty) return;
+
+    final docId = snap.docs.first.id;
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(docId)
+        .update({'status': newStatus});
+
+    setState(() {
+      _responderStatus = newStatus;
+    });
+  } catch (e) {
+    debugPrint("UpdateUserStatus error: $e");
+  }
+}
+
 
   // ---------------------------------------------------------------
   //                     MAIN UI STARTS HERE
@@ -307,47 +360,64 @@ class _HomePageState extends State<HomePage> {
   // ---------------------------------------------------------------
   // Status Toggle Card
   // ---------------------------------------------------------------
-  Widget _buildStatusCard() {
-    bool isAvailable = _responderStatus == "Available";
+ Widget _buildStatusCard() {
+  Color startColor, endColor;
+  IconData icon;
+  String displayText;
 
-    return InkWell(
-      onTap: _toggleResponderStatus,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: isAvailable
-                ? [Colors.green, Colors.greenAccent]
-                : [Colors.red, Colors.redAccent],
-          ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              isAvailable ? Icons.check_circle : Icons.cancel,
-              color: Colors.white,
-              size: 28,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isAvailable ? "Available" : "Unavailable",
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            Text(
-              "Tap to change",
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      ),
-    );
+  if (_responderStatus == "Available") {
+    startColor = Colors.green;
+    endColor = Colors.greenAccent;
+    icon = Icons.check_circle;
+    displayText = "Available";
+  } else if (_responderStatus == "Unavailable") {
+    startColor = Colors.red;
+    endColor = Colors.redAccent;
+    icon = Icons.cancel;
+    displayText = "Unavailable";
+  } else if (_responderStatus == "Dispatched") {
+    startColor = Colors.blue;
+    endColor = Colors.lightBlueAccent;
+    icon = Icons.local_fire_department;
+    displayText = "Dispatched";
+  } else {
+    startColor = Colors.grey;
+    endColor = Colors.blueGrey;
+    icon = Icons.help_outline;
+    displayText = _responderStatus;
   }
+
+  return InkWell(
+    onTap: _toggleResponderStatus,
+    child: Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [startColor, endColor]),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: Colors.white, size: 28),
+          const SizedBox(height: 8),
+          Text(
+            displayText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            "Tap to change",
+            style: TextStyle(color: Colors.white70),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 
   // ---------------------------------------------------------------
   // Time Card UI
@@ -399,7 +469,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // Modal for viewing alert details (quick open from Recent list)
+  // Modal for viewing alert details
   // ---------------------------------------------------------------
   void _openAlertViewModal(Map<String, dynamic> alert) {
     showDialog(
@@ -425,7 +495,8 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 12),
 
-              if (alert['userLatitude'] != null && alert['userLongitude'] != null)
+              if (alert['userLatitude'] != null &&
+                  alert['userLongitude'] != null)
                 Text("Coordinates: ${alert['userLatitude']}, ${alert['userLongitude']}"),
 
               const SizedBox(height: 12),
@@ -442,25 +513,22 @@ class _HomePageState extends State<HomePage> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  // Navigate button if coordinates exist on alert
-                  if (alert['userLatitude'] != null && alert['userLongitude'] != null)
+                  if (alert['userLatitude'] != null &&
+                      alert['userLongitude'] != null)
                     ElevatedButton(
                       onPressed: () async {
                         Navigator.pop(context);
-                        // Try to open direct navigation from responder to alert caller
                         await _openNavigationToAlert(
                           alertLat: (alert['userLatitude'] as num).toDouble(),
                           alertLng: (alert['userLongitude'] as num).toDouble(),
                         );
                       },
                       child: const Text("Navigate"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
                     ),
                   const SizedBox(width: 8),
                   ElevatedButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text("Close"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
                   ),
                 ],
               ),
@@ -523,15 +591,11 @@ class _HomePageState extends State<HomePage> {
           if (_dispatchStatus == "Dispatched") ...[
             ElevatedButton(
               onPressed: _openAlertDetails,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white, foregroundColor: Colors.blue),
               child: const Text("View"),
             ),
             const SizedBox(width: 8),
             ElevatedButton(
               onPressed: _markAsResolved,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white, foregroundColor: Colors.red),
               child: const Text("Resolve"),
             ),
           ],
@@ -541,7 +605,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // View Dispatch Details (opens alert doc and shows modal)
+  // View Dispatch Details
   // ---------------------------------------------------------------
   void _openAlertDetails() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -549,7 +613,7 @@ class _HomePageState extends State<HomePage> {
 
     final query = await FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email!.toLowerCase())
+        .where('responderEmails', arrayContains: user.email)
         .orderBy('timestamp', descending: true)
         .limit(1)
         .get();
@@ -574,7 +638,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // MARK DISPATCH AS RESOLVED
+  // MARK AS RESOLVED
   // ---------------------------------------------------------------
   void _markAsResolved() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -582,7 +646,7 @@ class _HomePageState extends State<HomePage> {
 
     final query = await FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email!.toLowerCase())
+        .where('responderEmails', arrayContains: user.email)
         .orderBy('timestamp', descending: true)
         .limit(1)
         .get();
@@ -627,14 +691,16 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // Alert Details Modal (for responder to view currently assigned alert)
+  // Alert Details Modal (for responder assigned alert)
   // ---------------------------------------------------------------
   Widget _alertDetailsModal() {
     if (_alertData == null) return const SizedBox();
 
     final a = _alertData!;
-    final userLat = (a['userLatitude'] is num) ? (a['userLatitude'] as num).toDouble() : null;
-    final userLng = (a['userLongitude'] is num) ? (a['userLongitude'] as num).toDouble() : null;
+    final userLat =
+        (a['userLatitude'] is num) ? (a['userLatitude'] as num).toDouble() : null;
+    final userLng =
+        (a['userLongitude'] is num) ? (a['userLongitude'] as num).toDouble() : null;
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -682,19 +748,15 @@ class _HomePageState extends State<HomePage> {
                   if (userLat != null && userLng != null)
                     ElevatedButton(
                       onPressed: () async {
-                        // Launch navigation using responder's latest location (from users doc) to the alert coords
-                        await _openNavigationToAlert(alertLat: userLat, alertLng: userLng);
+                        await _openNavigationToAlert(
+                            alertLat: userLat, alertLng: userLng);
                       },
                       child: const Text("Navigate"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
                     ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                    },
+                    onPressed: () => Navigator.pop(context),
                     child: const Text("Close"),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
                   ),
                 ],
               ),
@@ -706,46 +768,32 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ---------------------------------------------------------------
-  // NAVIGATION: find responder current coords then open external maps directions
+  // NAVIGATION → Uses EXACT email match
   // ---------------------------------------------------------------
   Future<void> _openNavigationToAlert({
     required double alertLat,
     required double alertLng,
   }) async {
-    // 1) get responder's own coordinates from users collection
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("User not logged in")),
-      );
-      return;
-    }
+    if (user == null) return;
 
     try {
       QuerySnapshot snap = await FirebaseFirestore.instance
           .collection('users')
-          .where('emailLower', isEqualTo: user.email!.toLowerCase())
+          .where('email', isEqualTo: user.email) // FIXED
           .limit(1)
           .get();
 
       if (snap.docs.isEmpty) {
-        snap = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: user.email)
-            .limit(1)
-            .get();
-      }
-
-      if (snap.docs.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Responder record not found in DB.")),
+          const SnackBar(content: Text("Responder record not found.")),
         );
         return;
       }
 
       final doc = snap.docs.first.data() as Map<String, dynamic>;
-      final resLat = (doc['latitude'] is num) ? (doc['latitude'] as num).toDouble() : null;
-      final resLng = (doc['longitude'] is num) ? (doc['longitude'] as num).toDouble() : null;
+      final resLat = (doc['latitude'] as num?)?.toDouble();
+      final resLng = (doc['longitude'] as num?)?.toDouble();
 
       if (resLat == null || resLng == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -754,12 +802,14 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      await _launchMapsDirections(originLat: resLat, originLng: resLng, destLat: alertLat, destLng: alertLng);
+      await _launchMapsDirections(
+        originLat: resLat,
+        originLng: resLng,
+        destLat: alertLat,
+        destLng: alertLng,
+      );
     } catch (e) {
       debugPrint("Navigation error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Could not open navigation.")),
-      );
     }
   }
 
@@ -770,7 +820,6 @@ class _HomePageState extends State<HomePage> {
     required double destLat,
     required double destLng,
   }) async {
-    // Use Google Maps directions link (works in browser & Android/iOS)
     final url = Uri.parse(
         'https://www.google.com/maps/dir/?api=1&origin=$originLat,$originLng&destination=$destLat,$destLng&travelmode=driving');
 
