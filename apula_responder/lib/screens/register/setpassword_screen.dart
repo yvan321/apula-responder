@@ -74,6 +74,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
         await userDoc.update({
           
           'verified': true,
+          'approved': false,                // ⬅ WAIT FOR ADMIN
           'verificationCode': FieldValue.delete(),
         });
       }

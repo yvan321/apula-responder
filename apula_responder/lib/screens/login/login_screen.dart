@@ -39,77 +39,99 @@ class _LoginScreenState extends State<LoginScreen> {
   // ============================================================
   // 🔥 LOGIN FUNCTION + SAVE FCM TOKEN
   // ============================================================
-  Future<void> _login() async {
-    final email = usernameController.text.trim().toLowerCase();
-    final password = passwordController.text.trim();
+Future<void> _login() async {
+  final email = usernameController.text.trim().toLowerCase();
+  final password = passwordController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      _showSnackBar("Please enter both email and password.", Colors.red);
-      return;
-    }
-
-    if (email.contains("admin")) {
-      _showSnackBar("Admin accounts must log in via the web dashboard.", Colors.red);
-      return;
-    }
-
-    try {
-      final userCredential = await FirebaseAuth.instance
-          .signInWithEmailAndPassword(email: email, password: password);
-
-      final user = userCredential.user!;
-
-      final userQuery = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: email)
-          .limit(1)
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        _showSnackBar("No user record found in Firestore.", Colors.red);
-        await FirebaseAuth.instance.signOut();
-        return;
-      }
-
-      final userData = userQuery.docs.first.data();
-
-      if (userData['role'] != 'responder') {
-        _showSnackBar("Only responder accounts can log in on this app.", Colors.red);
-        await FirebaseAuth.instance.signOut();
-        return;
-      }
-
-      if (userData['verified'] != true) {
-        _showSnackBar("Please verify your account before logging in.", Colors.red);
-        await FirebaseAuth.instance.signOut();
-        return;
-      }
-
-      // 🔥 Save FCM token
-      await FCMService.saveFcmToken(user.uid, email);
-
-      // SUCCESS
-      _showSnackBar("Login successful!", Colors.green);
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomePage()),
-      );
-
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'user-not-found') {
-        _showSnackBar("No account found with this email.", Colors.red);
-      } else if (e.code == 'wrong-password') {
-        _showSnackBar("Incorrect password.", Colors.red);
-      } else if (e.code == 'invalid-credential') {
-        _showSnackBar("Invalid email or password.", Colors.red);
-      } else {
-        _showSnackBar("Firebase error: ${e.message}", Colors.red);
-      }
-    } catch (e) {
-      _showSnackBar("Something went wrong: $e", Colors.red);
-    }
+  if (email.isEmpty || password.isEmpty) {
+    _showSnackBar("Please enter both email and password.", Colors.red);
+    return;
   }
+
+  if (email.contains("admin")) {
+    _showSnackBar("Admin accounts must log in via the web dashboard.", Colors.red);
+    return;
+  }
+
+  try {
+    final userCredential = await FirebaseAuth.instance
+        .signInWithEmailAndPassword(email: email, password: password);
+
+    final user = userCredential.user!;
+
+    final userQuery = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: email)
+        .limit(1)
+        .get();
+
+    if (userQuery.docs.isEmpty) {
+      _showSnackBar("No user record found in Firestore.", Colors.red);
+      await FirebaseAuth.instance.signOut();
+      return;
+    }
+
+    final userData = userQuery.docs.first.data();
+
+    // 🟦 Only responders can log in
+    if (userData['role'] != 'responder') {
+      _showSnackBar("Only responder accounts can log in on this app.", Colors.red);
+      await FirebaseAuth.instance.signOut();
+      return;
+    }
+
+    // 🟨 Email must be verified
+    if (userData['verified'] != true) {
+      _showSnackBar("Please verify your email first.", Colors.red);
+      await FirebaseAuth.instance.signOut();
+      return;
+    }
+
+    // 🟥 Must be approved by admin
+    if (userData['approved'] != true) {
+      _showSnackBar("Your account is waiting for admin approval.", Colors.orange);
+      await FirebaseAuth.instance.signOut();
+      return;
+    }
+
+    // 🚫 Declined responders cannot log in
+    if (userData['status'] == "declined") {
+      _showSnackBar("Your account was declined by the admin.", Colors.red);
+      await FirebaseAuth.instance.signOut();
+      return;
+    }
+
+    // 🟢 All APPROVED & VERIFIED responders can log in
+    // No more checking for "Available"
+
+    // Save FCM token
+    await FCMService.saveFcmToken(user.uid, email);
+
+    // SUCCESS
+    _showSnackBar("Login successful!", Colors.green);
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const HomePage()),
+    );
+
+  } on FirebaseAuthException catch (e) {
+    if (e.code == 'user-not-found') {
+      _showSnackBar("No account found with this email.", Colors.red);
+    } else if (e.code == 'wrong-password') {
+      _showSnackBar("Incorrect password.", Colors.red);
+    } else if (e.code == 'invalid-credential') {
+      _showSnackBar("Invalid email or password.", Colors.red);
+    } else {
+      _showSnackBar("Firebase error: ${e.message}", Colors.red);
+    }
+  } catch (e) {
+    _showSnackBar("Something went wrong: $e", Colors.red);
+  }
+}
+
+
+
 
   // ============================================================
   // FINGERPRINT LOGIN

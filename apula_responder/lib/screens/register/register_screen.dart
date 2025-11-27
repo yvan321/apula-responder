@@ -85,11 +85,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'role': 'responder',
         'platform': 'mobile',
         'verificationCode': code,
-        'verified': false,
+        'verified': false,           // email not verified yet
+        'approved': false,           // waiting for admin approval
+        'status': "Unavailable",     // responder cannot be dispatched yet
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      final url = Uri.parse("http://localhost:3005/send-verification");
+      final url = Uri.parse("http://10.238.220.202:3005/send-verification");
+
 
       final response = await http.post(
         url,

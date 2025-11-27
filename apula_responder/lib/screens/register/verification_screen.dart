@@ -144,9 +144,14 @@ class _VerificationScreenState extends State<VerificationScreen> {
       }
 
       await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userDoc.id)
-          .update({'verified': true});
+    .collection('users')
+    .doc(userDoc.id)
+    .update({
+      'verified': false,
+      'approved': false,                // still waiting for admin
+    
+    });
+
 
       showDialog(
         context: context,
