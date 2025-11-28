@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- REQUIRED PERMISSIONS -->
+    <!-- Internet (usually present, but ensure it's added) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keep CPU awake for FCM handling if needed -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Android 13+: must be declared to request at runtime -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="Apula Responder"
         tools:replace="android:label"

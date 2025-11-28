@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';  // ⭐ Added
 
 import 'firebase_options.dart';
 
@@ -17,12 +18,12 @@ import 'screens/register/verification_screen.dart';
 import 'screens/register/setpassword_screen.dart';
 
 /// ---------------------------------------------------------------
-/// 🔔 GLOBAL NAVIGATOR KEY (allows navigation outside widget tree)
+/// 🔔 GLOBAL NAVIGATOR KEY
 /// ---------------------------------------------------------------
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// ---------------------------------------------------------------
-/// 🔔 Background FCM Handler
+/// 🔔 BACKGROUND FCM HANDLER
 /// ---------------------------------------------------------------
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -36,9 +37,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
-/// ---------------------------------------------------------------
-/// 🔔 Set up Notification Channel for Android
-/// ---------------------------------------------------------------
 Future<void> _setupLocalNotifications() async {
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'high_importance_channel',
@@ -49,8 +47,7 @@ Future<void> _setupLocalNotifications() async {
 
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin
-      >()
+          AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
 
   const InitializationSettings initSettings = InitializationSettings(
@@ -60,7 +57,6 @@ Future<void> _setupLocalNotifications() async {
   await flutterLocalNotificationsPlugin.initialize(
     initSettings,
     onDidReceiveNotificationResponse: (details) {
-      // Notification tapped while app is open
       navigatorKey.currentState?.pushNamed('/home');
     },
   );
@@ -71,13 +67,15 @@ Future<void> _setupLocalNotifications() async {
 /// ---------------------------------------------------------------
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // Background notification handler
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
   await _setupLocalNotifications();
+
+  // ⭐ REQUEST ANDROID 13+ NOTIFICATION PERMISSION
+  if (await Permission.notification.isDenied) {
+    await Permission.notification.request();
+  }
 
   runApp(const MyApp());
 }
@@ -87,7 +85,6 @@ Future<void> main() async {
 /// ---------------------------------------------------------------
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
-
   @override
   State<MyApp> createState() => _MyAppState();
 }
@@ -100,33 +97,24 @@ class _MyAppState extends State<MyApp> {
   }
 
   /// -----------------------------------------------------------
-  /// 🚀 Initialize Firebase Cloud Messaging listeners
+  /// 🚀 Firebase Messaging Init
   /// -----------------------------------------------------------
   Future<void> _initFCM() async {
     FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-    // Request permissions for iOS (safe on Android)
     await messaging.requestPermission();
-
-    // Print token on app start
     String? token = await messaging.getToken();
     print("📱 FCM Device Token: $token");
 
-    // Save token to Firestore
     await _saveTokenToFirestore(token);
 
-    // Handle token refresh
     FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
       print("♻️ Token refreshed: $newToken");
       _saveTokenToFirestore(newToken);
     });
 
-    // -------------------------------------------------------
-    // 🔔 Foreground notifications
-    // -------------------------------------------------------
+    // Foreground
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print("🔔 Foreground Notification: ${message.notification?.title}");
-
       if (message.notification != null) {
         flutterLocalNotificationsPlugin.show(
           message.hashCode,
@@ -144,29 +132,21 @@ class _MyAppState extends State<MyApp> {
       }
     });
 
-    // -------------------------------------------------------
-    // 🔔 App opened from background (tap on notification)
-    // -------------------------------------------------------
+    // Background tap
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      print("📨 App opened from background by notification: ${message.data}");
       navigatorKey.currentState?.pushNamed('/home');
     });
 
-    // -------------------------------------------------------
-    // 🔔 App opened from terminated state
-    // -------------------------------------------------------
-    RemoteMessage? initialMessage = await FirebaseMessaging.instance
-        .getInitialMessage();
+    // Terminated state
+    RemoteMessage? initialMessage =
+        await FirebaseMessaging.instance.getInitialMessage();
     if (initialMessage != null) {
-      print(
-        "🚀 App launched by notification (terminated): ${initialMessage.data}",
-      );
       navigatorKey.currentState?.pushNamed('/home');
     }
   }
 
   /// -----------------------------------------------------------
-  /// 🔥 SAVE TOKEN WITH userId + email (admin panel requires this)
+  /// 🔥 SAVE FCM TOKEN
   /// -----------------------------------------------------------
   Future<void> _saveTokenToFirestore(String? token) async {
     if (token == null) return;
@@ -176,9 +156,9 @@ class _MyAppState extends State<MyApp> {
 
     await FirebaseFirestore.instance.collection("fcm_tokens").doc(user.uid).set(
       {
-        "userId": user.uid, // ✅ REQUIRED
-        "email": user.email, // ✅ REQUIRED
-        "token": token, // FCM token
+        "userId": user.uid,
+        "email": user.email,
+        "token": token,
         "updatedAt": FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
@@ -188,7 +168,7 @@ class _MyAppState extends State<MyApp> {
   }
 
   /// -----------------------------------------------------------
-  /// UI BUILD
+  /// UI BUILD — WITH SYSTEM THEME SUPPORT
   /// -----------------------------------------------------------
   @override
   Widget build(BuildContext context) {
@@ -198,9 +178,26 @@ class _MyAppState extends State<MyApp> {
       navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: "Apula",
+
+      themeMode: ThemeMode.system,
+
+      // 🌞 LIGHT THEME
       theme: ThemeData(
         useMaterial3: true,
+        brightness: Brightness.light,
         colorScheme: ColorScheme.fromSeed(seedColor: primaryRed),
+        scaffoldBackgroundColor: Colors.white,
+      ),
+
+      // 🌙 DARK THEME
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: primaryRed,
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF121212),
       ),
 
       initialRoute: '/',

@@ -1,3 +1,4 @@
+// lib/screens/app/dispatch/dispatch_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,60 +12,121 @@ class DispatchPage extends StatefulWidget {
 }
 
 class _DispatchPageState extends State<DispatchPage> {
-  int _prevCount = 0;
   String searchQuery = "";
   DateTime? selectedDate;
+
+  final ScrollController _scrollController = ScrollController();
+  bool _showBackToTop = false;
+
+  double fabBottom = 25;
+  double fabRight = 16;
 
   @override
   void initState() {
     super.initState();
-    final email = FirebaseAuth.instance.currentUser?.email;
-    print("📧 Logged in as: $email");
+
+    _scrollController.addListener(() {
+      if (_scrollController.offset > 300 && !_showBackToTop) {
+        setState(() => _showBackToTop = true);
+      } else if (_scrollController.offset <= 300 && _showBackToTop) {
+        setState(() => _showBackToTop = false);
+      }
+    });
   }
 
-  // 🔥 Modal Popup
+  // -------------------------------------------------------------------
+  // POPUP MODAL
+  // -------------------------------------------------------------------
   void _openDetailsModal(Map<String, dynamic> data) {
-    final time = (data["timestamp"] as Timestamp).toDate();
+    final ts = (data["timestamp"] as Timestamp).toDate();
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Dispatch Details"),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("🔥 Alert: ${data['alertType']}"),
-              Text("📍 Contact: ${data['userContact']}"),
-              Text(
-                "🏠 Caller Address: ${data['userAddress'] ?? "Not Provided"}",
-              ),
-              Text("👤 Reported By: ${data['userReported']}"),
-              Text("📌 Status: ${data['status']}"),
-              Text("🕒 Time: $time"),
-              const SizedBox(height: 15),
-              const Text(
-                "Responders:",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              ...((data["responders"] ?? []) as List).map(
-                (r) => Text("- ${r["name"]} (${r["email"]})"),
-              ),
-            ],
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          width: 380,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Dispatch Details",
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+
+                const SizedBox(height: 16),
+                _info("Status", data["status"]),
+                _info("Alert Type", data["alertType"] ?? "N/A"),
+                _info("Location", data["alertLocation"] ?? "N/A"),
+                _info("Reporter", data["userReported"] ?? "N/A"),
+                _info("Contact", data["userContact"] ?? "N/A"),
+                _info("Address", data["userAddress"] ?? "N/A"),
+
+                const SizedBox(height: 8),
+                _info("Timestamp", ts.toString()),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Responders:",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 6),
+
+                ...(data["responders"] ?? []).map<Widget>(
+                  (r) => Text("- ${r["name"]} (${r["email"]})"),
+                ),
+
+                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFA30000),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 22,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("Close"),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            child: const Text("Close"),
-            onPressed: () => Navigator.pop(context),
+      ),
+    );
+  }
+
+  Widget _info(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "$label: ",
+            style: const TextStyle(
+              color: Color(0xFFA30000),
+              fontWeight: FontWeight.bold,
+            ),
           ),
+          Expanded(child: Text(value)),
         ],
       ),
     );
   }
 
-  // 📅 Date Picker
+  // -------------------------------------------------------------------
+  // DATE PICKER
+  // -------------------------------------------------------------------
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -72,52 +134,57 @@ class _DispatchPageState extends State<DispatchPage> {
       firstDate: DateTime(2020),
       lastDate: DateTime(2030),
     );
-
-    if (picked != null) {
-      setState(() => selectedDate = picked);
-    }
+    if (picked != null) setState(() => selectedDate = picked);
   }
 
+  // -------------------------------------------------------------------
+  // MAIN UI
+  // -------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final currentEmail = FirebaseAuth.instance.currentUser?.email;
-    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Back Button
-              InkWell(
-                onTap: () => Navigator.pop(context),
-                borderRadius: BorderRadius.circular(30),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(
-                    Icons.chevron_left,
-                    size: 30,
-                    color: colorScheme.primary,
-                  ),
-                ),
+      floatingActionButton: _showBackToTop
+          ? Padding(
+              padding: EdgeInsets.only(right: fabRight, bottom: fabBottom),
+              child: FloatingActionButton(
+                backgroundColor: const Color(0xFFA30000),
+                child: const Icon(Icons.arrow_upward, color: Colors.white),
+                onPressed: () {
+                  _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeOut,
+                  );
+                },
               ),
-              const SizedBox(height: 10),
+            )
+          : null,
 
-              // Page Title
-              Text(
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // TITLE
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 0),
+              child: Text(
                 "Dispatches",
                 style: TextStyle(
-                  color: colorScheme.primary,
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
+                  color: Color(0xFFA30000),
                 ),
               ),
-              const SizedBox(height: 20),
+            ),
 
-              /// Search + Filter Row
-              Row(
+            const SizedBox(height: 10),
+
+            // SEARCH + FILTER
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
                 children: [
                   Expanded(
                     child: TextField(
@@ -128,31 +195,36 @@ class _DispatchPageState extends State<DispatchPage> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      onChanged: (value) {
-                        setState(() => searchQuery = value.toLowerCase());
-                      },
+                      onChanged: (v) =>
+                          setState(() => searchQuery = v.toLowerCase()),
                     ),
                   ),
-
                   const SizedBox(width: 10),
-
                   ElevatedButton.icon(
                     onPressed: _pickDate,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: colorScheme.primary,
-                      foregroundColor:
-                          colorScheme.onPrimary, // ← icon + text color
-                    ),
                     icon: const Icon(Icons.calendar_month),
-                    label: const Text("Filter Date"),
+                    label: const Text("Filter"),
                   ),
                 ],
               ),
+            ),
 
-              const SizedBox(height: 20),
+            const SizedBox(height: 10),
 
-              /// Table
-              Expanded(
+            // -------------------------------------------------------------------
+            // MAIN LIST WITH PULL TO REFRESH
+            // -------------------------------------------------------------------
+            Expanded(
+              child: RefreshIndicator(
+                color: const Color(0xFFA30000),
+                backgroundColor: Colors.white,
+                strokeWidth: 2.5,
+                triggerMode: RefreshIndicatorTriggerMode.anywhere,
+                onRefresh: () async {
+                  await Future.delayed(const Duration(milliseconds: 300));
+                  setState(() {});
+                },
+
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('dispatches')
@@ -166,189 +238,154 @@ class _DispatchPageState extends State<DispatchPage> {
 
                     final docs = snapshot.data!.docs;
 
-                    /// New Dispatch Notification
-                    if (_prevCount < docs.length) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text("🚨 New dispatch assigned!"),
-                            backgroundColor: Colors.redAccent,
-                          ),
-                        );
-                      });
-                    }
-                    _prevCount = docs.length;
+                    // Filtering logic
+                    final filtered = docs.where((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      final s = searchQuery;
 
-                    /// Search + Date Filter
-                    final filtered = docs.where((d) {
-                      final data = d.data() as Map<String, dynamic>;
-                      final search = searchQuery;
+                      final String reporter =
+                          data["userReported"]?.toString().toLowerCase() ?? "";
+                      final String status =
+                          data["status"]?.toString().toLowerCase() ?? "";
+                      final String address =
+                          data["userAddress"]?.toString().toLowerCase() ?? "";
+                      final String location =
+                          data["alertLocation"]?.toString().toLowerCase() ?? "";
+                      final String alertType =
+                          data["alertType"]?.toString().toLowerCase() ?? "";
+                      final String contact =
+                          data["userContact"]?.toString().toLowerCase() ?? "";
 
-                      final matchSearch =
-                          data["alertType"].toString().toLowerCase().contains(
-                            search,
-                          ) ||
-                          data["alertLocation"]
-                              .toString()
-                              .toLowerCase()
-                              .contains(search) ||
-                          data["userReported"]
-                              .toString()
-                              .toLowerCase()
-                              .contains(search) ||
-                          data["status"].toString().toLowerCase().contains(
-                            search,
-                          );
+                      final DateTime ts =
+                          (data["timestamp"] as Timestamp).toDate();
+                      final String timestampFormatted =
+                          "${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')} "
+                          "${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}";
+
+                      final matches =
+                          reporter.contains(s) ||
+                          status.contains(s) ||
+                          address.contains(s) ||
+                          location.contains(s) ||
+                          alertType.contains(s) ||
+                          contact.contains(s) ||
+                          timestampFormatted.contains(s);
 
                       if (selectedDate != null) {
-                        final date = (data["timestamp"] as Timestamp).toDate();
-                        final sameDay =
-                            date.year == selectedDate!.year &&
-                            date.month == selectedDate!.month &&
-                            date.day == selectedDate!.day;
-                        return matchSearch && sameDay;
+                        return ts.year == selectedDate!.year &&
+                            ts.month == selectedDate!.month &&
+                            ts.day == selectedDate!.day &&
+                            matches;
                       }
 
-                      return matchSearch;
+                      return matches;
                     }).toList();
 
                     if (filtered.isEmpty) {
                       return const Center(child: Text("No dispatch found."));
                     }
 
-                    return Expanded(
-                      child: Scrollbar(
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.vertical, // 👈 vertical scroll
-                          child: SingleChildScrollView(
-                            scrollDirection:
-                                Axis.horizontal, // 👈 horizontal scroll
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(
-                                minWidth: 1500, // prevents wide blank space
-                              ),
-                              child: DataTable(
-                                showCheckboxColumn: false,
-                                headingRowHeight: 45,
-                                dataRowHeight: 55,
-                                horizontalMargin: 12,
-                                columnSpacing: 20,
+                    return SingleChildScrollView(
+                      controller: _scrollController,
+                      padding:
+                          const EdgeInsets.fromLTRB(20, 10, 20, 30),
+                      child: Column(
+                        children: filtered.map((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          final ts =
+                              (data["timestamp"] as Timestamp).toDate();
 
-                                columns: const [
-                                  DataColumn(label: Text("Reporter")),
-                                  DataColumn(label: Text("Contact")),
-                                  DataColumn(label: Text("Address")),
-                                  DataColumn(label: Text("Time")),
-                                  DataColumn(label: Text("Status")),
+                          final formatted =
+                              "${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')} "
+                              "${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}";
+
+                          final statusResolved =
+                              data["status"] == "Resolved";
+
+                          return GestureDetector(
+                            onTap: () => _openDetailsModal(data),
+                            child: Container(
+                              margin:
+                                  const EdgeInsets.only(bottom: 14),
+                              padding: const EdgeInsets.all(18),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Colors.red, Colors.orange],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius:
+                                    BorderRadius.circular(16),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 6,
+                                    offset: Offset(0, 3),
+                                  ),
                                 ],
-
-                                rows: filtered.map((doc) {
-                                  final data =
-                                      doc.data() as Map<String, dynamic>;
-                                  final ts = (data["timestamp"] as Timestamp)
-                                      .toDate();
-
-                                  final formattedTime =
-                                      "${ts.year}-${ts.month.toString().padLeft(2, '0')}-"
-                                      "${ts.day.toString().padLeft(2, '0')} "
-                                      "${ts.hour.toString().padLeft(2, '0')}:"
-                                      "${ts.minute.toString().padLeft(2, '0')}";
-
-                                  Color statusColor =
-                                      data["status"] == "Resolved"
-                                      ? Colors.green
-                                      : Colors.redAccent;
-
-                                  return DataRow(
-                                    onSelectChanged: (_) =>
-                                        _openDetailsModal(data),
-                                    cells: [
-                                      /// REPORTER
-                                      DataCell(
-                                        SizedBox(
-                                          width: 120,
-                                          child: Text(
-                                            data["userReported"],
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        formatted,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
                                         ),
                                       ),
-
-                                      /// CONTACT
-                                      DataCell(
-                                        SizedBox(
-                                          width: 120,
-                                          child: Text(
-                                            data["userContact"],
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
+                                      Container(
+                                        padding: const EdgeInsets
+                                            .symmetric(
+                                          horizontal: 12,
+                                          vertical: 6,
                                         ),
-                                      ),
-
-                                      /// ADDRESS
-                                      DataCell(
-                                        SizedBox(
-                                          width: 220,
-                                          child: Text(
-                                            data["userAddress"] ?? "N/A",
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
+                                        decoration: BoxDecoration(
+                                          color: statusResolved
+                                              ? Colors.green
+                                              : Colors.redAccent,
+                                          borderRadius:
+                                              BorderRadius.circular(
+                                                  20),
                                         ),
-                                      ),
-
-                                      /// TIME
-                                      DataCell(
-                                        SizedBox(
-                                          width: 170,
-                                          child: Text(
-                                            formattedTime,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ),
-
-                                      /// STATUS
-                                      DataCell(
-                                        SizedBox(
-                                          width: 120,
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 10,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: statusColor.withOpacity(
-                                                0.18,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Text(
-                                              data["status"],
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                color: statusColor,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
+                                        child: Text(
+                                          data["status"],
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight:
+                                                FontWeight.bold,
                                           ),
                                         ),
                                       ),
                                     ],
-                                  );
-                                }).toList(),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    data["userAddress"] ??
+                                        "Unknown Address",
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                        ),
+                          );
+                        }).toList(),
                       ),
                     );
                   },
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -4,10 +4,13 @@ class CustomBottomNavBar extends StatelessWidget {
   final int selectedIndex;
   final Function(int) onItemTapped;
 
+  final int notifCount; // 🔥 UNREAD NOTIF COUNTER
+
   const CustomBottomNavBar({
     super.key,
     required this.selectedIndex,
-    required this.onItemTapped, required Color backgroundColor, required Color activeColor, required Color inactiveColor,
+    required this.onItemTapped,
+    required this.notifCount,
   });
 
   @override
@@ -17,28 +20,61 @@ class CustomBottomNavBar extends StatelessWidget {
       currentIndex: selectedIndex,
       onTap: onItemTapped,
       backgroundColor: Colors.white,
-      selectedItemColor: const Color(0xFFA30000), // Apula red accent
+      selectedItemColor: const Color(0xFFA30000), // Active red
       unselectedItemColor: Colors.grey,
-      selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
-      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w400),
       elevation: 12,
-      items: const [
-        BottomNavigationBarItem(
+      items: [
+        const BottomNavigationBarItem(
           icon: Icon(Icons.home_outlined),
           activeIcon: Icon(Icons.home),
           label: "Home",
         ),
-        BottomNavigationBarItem(
+
+        const BottomNavigationBarItem(
           icon: Icon(Icons.local_fire_department_outlined),
           activeIcon: Icon(Icons.local_fire_department),
           label: "Dispatch",
         ),
+
+        // 🔥 NOTIFICATION WITH BADGE
         BottomNavigationBarItem(
-          icon: Icon(Icons.notifications_none),
-          activeIcon: Icon(Icons.notifications),
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.notifications_none),
+
+              if (notifCount > 0)
+                Positioned(
+                  right: -6,
+                  top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFA30000),
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 20,
+                      minHeight: 20,
+                    ),
+                    child: Text(
+                      notifCount > 9 ? "9+" : notifCount.toString(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          activeIcon: const Icon(Icons.notifications),
           label: "Notifications",
         ),
-        BottomNavigationBarItem(
+
+        const BottomNavigationBarItem(
           icon: Icon(Icons.settings_outlined),
           activeIcon: Icon(Icons.settings),
           label: "Settings",

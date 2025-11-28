@@ -16,17 +16,11 @@ class AboutPage extends StatelessWidget {
       body: SafeArea(
         child: Column(
           children: [
-            // 🔙 Top Bar with Back Button + Title
+            // 🔙 Top Bar (NO BACKGROUND)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.only(top: 20, left: 10, right: 10),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [redColor, Colors.black],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
+              color: Colors.transparent, // 🔥 no bg
               child: Row(
                 children: [
                   InkWell(
@@ -34,24 +28,28 @@ class AboutPage extends StatelessWidget {
                     borderRadius: BorderRadius.circular(30),
                     child: Container(
                       padding: const EdgeInsets.all(8),
-                      child: const Icon(
+                      child: Icon(
                         Icons.chevron_left,
                         size: 30,
-                        color: Colors.white,
+                        color: theme.brightness == Brightness.dark
+                            ? Colors.white
+                            : redColor,
                       ),
                     ),
                   ),
                   const Spacer(),
-                  const Text(
+                  Text(
                     "About",
                     style: TextStyle(
-                      color: Colors.white,
+                      color: theme.brightness == Brightness.dark
+                          ? Colors.white
+                          : redColor,
                       fontSize: 26,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const Spacer(),
-                  const SizedBox(width: 40), // balances the layout
+                  const SizedBox(width: 40),
                 ],
               ),
             ),
@@ -65,7 +63,7 @@ class AboutPage extends StatelessWidget {
                   children: [
                     const SizedBox(height: 20),
 
-                    // 🔥 App Logo
+                    // 🔥 Logo
                     Image.asset(
                       'assets/logo.png',
                       width: 130,
@@ -73,13 +71,13 @@ class AboutPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 30),
 
-                    // 🧠 App Description
+                    // 🧠 Description
                     Text(
                       "Apula is a CNN-powered fire detection and alert system designed "
                       "for both responders and community safety. It integrates CCTV "
                       "footage, thermal imaging, and IoT sensors to detect early fire "
-                      "indicators such as smoke, small flames, and temperature changes. "
-                      "\n\nWith real-time alerts, live monitoring, and synchronized notifications, "
+                      "indicators such as smoke, small flames, and temperature changes.\n\n"
+                      "With real-time alerts, live monitoring, and synchronized notifications, "
                       "Apula ensures quick response, efficient dispatching, and enhanced "
                       "fire prevention in residential and commercial areas.",
                       textAlign: TextAlign.center,
@@ -89,10 +87,9 @@ class AboutPage extends StatelessWidget {
                         height: 1.6,
                       ),
                     ),
-
                     const SizedBox(height: 40),
 
-                    // 🧰 Version Info
+                    // 🔧 Version Info
                     Column(
                       children: [
                         Text(
@@ -116,7 +113,7 @@ class AboutPage extends StatelessWidget {
 
                     const SizedBox(height: 40),
 
-                    // ⚙️ Footer or Tagline
+                    // 🔥 Tagline
                     Text(
                       "“Fast Response. Smarter Detection. Safer Communities.”",
                       textAlign: TextAlign.center,
