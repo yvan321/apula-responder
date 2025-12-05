@@ -10,14 +10,16 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  local_auth: ^2.2.0
+
+  # Core UI and utilities
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.5+1
   lottie: ^3.1.2
+  local_auth: ^2.2.0
   mobile_scanner: ^6.0.2
   audioplayers: ^6.0.0
 
-  cupertino_icons: ^1.0.8
-  provider: ^6.1.5+1
-
+  # Firebase
   firebase_core: ^4.2.0
   firebase_auth: ^6.1.1
   cloud_firestore: ^6.0.3
@@ -27,11 +29,18 @@ dependencies:
   flutter_local_notifications: ^17.1.2
   permission_handler: ^11.0.1
 
+  # Maps + Navigation
+  google_maps_flutter: ^2.5.0
+  flutter_polyline_points: ^2.0.0
+  geolocator: ^12.0.0
+  flutter_tts: ^4.0.0
+  http: ^1.2.1
 
-
+  # Optional map alternative
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
-  http: ^1.2.1
+
+  # External apps & links
   url_launcher: ^6.1.10
 
 dev_dependencies:
@@ -46,6 +55,8 @@ flutter_icons:
   image_path: "assets/responder_logo.png"
 
 flutter:
+  uses-material-design: true
+
   assets:
     - assets/logo.png
     - assets/responder_logo.png
@@ -57,5 +68,5 @@ flutter:
     - assets/examples/fire_example.jpg
     - assets/examples/profile_pic.jpg
     - assets/examples/thermal_example.png
-
-  uses-material-design: true
+    - assets/fire_pin.png
+    - assets/responder_pin.png

@@ -8,6 +8,7 @@ import 'package:apula_responder/widgets/custom_bottom_nav.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
 
 // NEW imports
 import 'package:audioplayers/audioplayers.dart';
@@ -1019,7 +1020,7 @@ class _HomePageState extends State<HomePage> {
     try {
       QuerySnapshot snap = await FirebaseFirestore.instance
           .collection('users')
-          .where('email', isEqualTo: user.email) // FIXED
+          .where('email', isEqualTo: user.email)
           .limit(1)
           .get();
 
@@ -1041,11 +1042,18 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      await _launchMapsDirections(
-        originLat: resLat,
-        originLng: resLng,
-        destLat: alertLat,
-        destLng: alertLng,
+      // 🔥 Push in-app map screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MapNavigationPage(
+            responderLat: resLat,
+            responderLng: resLng,
+            alertLat: alertLat,
+            alertLng: alertLng,
+            apiKey: "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680",
+          ),
+        ),
       );
     } catch (e) {
       debugPrint("Navigation error: $e");

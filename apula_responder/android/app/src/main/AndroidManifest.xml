@@ -2,11 +2,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- REQUIRED PERMISSIONS -->
-    <!-- Internet (usually present, but ensure it's added) -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Keep CPU awake for FCM handling if needed -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Android 13+: must be declared to request at runtime -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -14,6 +11,11 @@
         tools:replace="android:label"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+        <!-- ⭐ GOOGLE MAPS API KEY (REQUIRED) -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680" />
 
         <!-- 🔥 REQUIRED FOR FCM NOTIFICATIONS -->
         <meta-data
@@ -25,7 +27,7 @@
             android:name="firebase_messaging_auto_init_enabled"
             android:value="true" />
 
-        <!-- 🔥 Ensures Firebase Analytics works correctly -->
+        <!-- 🔥 Ensure Firebase Analytics works correctly -->
         <meta-data
             android:name="google_analytics_automatic_screen_reporting_enabled"
             android:value="false" />
@@ -61,4 +63,5 @@
             <data android:mimeType="text/plain" />
         </intent>
     </queries>
+
 </manifest>
