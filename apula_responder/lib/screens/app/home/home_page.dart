@@ -607,7 +607,9 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(width: 12),
           // 🔥 View button
           ElevatedButton(
-            onPressed: () => _openAlertViewModal(alert),
+            onPressed: () {
+              _openAlertViewModal(alert);
+            },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white,
               foregroundColor: Colors.red,
@@ -621,6 +623,14 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
+  }
+
+  void _stopAlarm() {
+    try {
+      _player.stop(); // stop audio immediately
+    } catch (_) {}
+
+    _hasPlayedSound = true; // prevent replay for this dispatch
   }
 
   // ---------------------------------------------------------------
@@ -759,7 +769,10 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _openAlertDetails,
+                    onPressed: () {
+                      _stopAlarm();
+                      _openAlertDetails();
+                    },
                     child: const Text("View"),
                   ),
                 ),
@@ -897,6 +910,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _alertDetailsModal() {
+    _stopAlarm(); // 🔕 safety stop if modal opened from anywhere
     if (_alertData == null) return const SizedBox();
 
     final a = _alertData!;
