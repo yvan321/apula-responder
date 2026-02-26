@@ -13,6 +13,11 @@ import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
 // NEW imports
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '/services/sms_service.dart';
+
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -26,6 +31,8 @@ class _HomePageState extends State<HomePage> {
   String _time = "", _date = "";
   Timer? _timer;
   bool _isDay = true;
+  String? _lastDispatchId;
+  String? _previousDispatchStatus;
 
   // 🔥 Dispatch Tracking
   String _dispatchStatus = "Loading...";
@@ -55,19 +62,19 @@ class _HomePageState extends State<HomePage> {
       FlutterLocalNotificationsPlugin();
 
   @override
-  void initState() {
-    super.initState();
-    _updateTime();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
-    _listenToDispatchStatus();
-    _loadRecentAlerts();
-    _getResponderStatus();
-    _listenUnreadNotifications();
+void initState() {
+  super.initState();
 
-    // Optionally initialize local notifications here (main.dart already set up channel).
-    // This initialize call is harmless even if main already initialized plugin.
-    _initializeLocalNotifications();
-  }
+  SmsService.initialize(); // <-- ADD THIS LINE
+
+  _updateTime();
+  _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+  _listenToDispatchStatus();
+  _loadRecentAlerts();
+  _getResponderStatus();
+  _listenUnreadNotifications();
+  _initializeLocalNotifications();
+}
 
   Future<void> _initializeLocalNotifications() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -100,6 +107,29 @@ class _HomePageState extends State<HomePage> {
             _unreadNotifCount = snapshot.docs.length;
           });
         });
+  }
+
+  // ---------------------------------------------------------------
+  // Download image from snapshotUrl and save locally
+  // ---------------------------------------------------------------
+  Future<String?> _downloadAndSaveImage(String url, String fileName) async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final filePath = '${directory.path}/$fileName';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode == 200) {
+        final file = File(filePath);
+        await file.writeAsBytes(response.bodyBytes);
+        return filePath;
+      } else {
+        debugPrint("Image HTTP error: ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("Image download failed: $e");
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------
@@ -219,14 +249,22 @@ class _HomePageState extends State<HomePage> {
 
         // UPDATE UI & Firestore BASED ON DISPATCH STATUS
         if (status == "Dispatched") {
-          // PLAY SOUND & SHOW LOCAL NOTIFICATION (only once per dispatch)
-          if (!_hasPlayedSound) {
-            _hasPlayedSound = true;
+          final newDispatchId = snapshot.docs.first.id;
+
+          // ONLY when a NEW dispatch document appears
+          if (_lastDispatchId != newDispatchId) {
+            _lastDispatchId = newDispatchId;
+
+            print("🔥 NEW DISPATCH DETECTED");
+            print("📍 Address: $address");
+
             _playDispatchSound();
             _showDispatchNotification();
+
+            // <<< SMS WILL NOW SEND CORRECTLY
+            await SmsService.sendDispatch(location: address);
           }
 
-          // Only set if not already dispatched
           if (_responderStatus != "Dispatched") {
             await _updateUserStatus("Dispatched");
           }
@@ -268,29 +306,87 @@ class _HomePageState extends State<HomePage> {
   // ---------------------------------------------------------------
   // 🔔 Show local notification (uses same channel id as main.dart)
   // ---------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // 🔔 Show DISPATCH notification WITH IMAGE
+  // ---------------------------------------------------------------
   Future<void> _showDispatchNotification() async {
     try {
-      const androidDetails = AndroidNotificationDetails(
-        'high_importance_channel', // must match channel created in main.dart
-        'High Importance Notifications',
-        channelDescription: 'Used for critical dispatcher alerts',
-        importance: Importance.high,
-        priority: Priority.high,
-        playSound: true,
-        icon: '@mipmap/ic_launcher',
-      );
+      String? imagePath;
 
-      const platformDetails = NotificationDetails(android: androidDetails);
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // 🔥 get latest dispatch document
+      final query = await FirebaseFirestore.instance
+          .collection('dispatches')
+          .where('responderEmails', arrayContains: user.email)
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      String address = "Active fire incident";
+
+      if (query.docs.isNotEmpty) {
+        final data = query.docs.first.data();
+
+        address = data['userAddress'] ?? address;
+
+        final snapshotUrl = data['snapshotUrl'];
+
+        // 🔥 Download the fire image
+        if (snapshotUrl != null && snapshotUrl.toString().isNotEmpty) {
+          imagePath = await _downloadAndSaveImage(
+            snapshotUrl,
+            "dispatch_image.jpg",
+          );
+        }
+      }
+
+      AndroidNotificationDetails androidDetails;
+
+      // ---------- WITH IMAGE ----------
+      if (imagePath != null) {
+        final bigPictureStyle = BigPictureStyleInformation(
+          FilePathAndroidBitmap(imagePath),
+          contentTitle: '🚨 FIRE DISPATCH',
+          summaryText: address,
+        );
+
+        androidDetails = AndroidNotificationDetails(
+          'high_importance_channel',
+          'High Importance Notifications',
+          channelDescription: 'Used for critical dispatcher alerts',
+          importance: Importance.max,
+          priority: Priority.max,
+          styleInformation: bigPictureStyle,
+          playSound: true,
+          icon: '@mipmap/ic_launcher',
+        );
+      }
+      // ---------- WITHOUT IMAGE ----------
+      else {
+        androidDetails = const AndroidNotificationDetails(
+          'high_importance_channel',
+          'High Importance Notifications',
+          channelDescription: 'Used for critical dispatcher alerts',
+          importance: Importance.max,
+          priority: Priority.max,
+          playSound: true,
+          icon: '@mipmap/ic_launcher',
+        );
+      }
+
+      final notificationDetails = NotificationDetails(android: androidDetails);
 
       await _localNotifications.show(
         DateTime.now().millisecondsSinceEpoch ~/ 1000,
         '🚨 DISPATCH ALERT',
-        'You have been dispatched to an active incident.',
-        platformDetails,
-        payload: 'dispatch', // optional payload
+        address,
+        notificationDetails,
+        payload: 'dispatch',
       );
     } catch (e) {
-      debugPrint("Error showing notification: $e");
+      debugPrint("Notification error: $e");
     }
   }
 
@@ -314,6 +410,7 @@ class _HomePageState extends State<HomePage> {
       _recentAlerts = alerts;
     });
   }
+  
 
   // TIME & DATE
   void _updateTime() {
@@ -328,6 +425,8 @@ class _HomePageState extends State<HomePage> {
       _isDay = now.hour >= 6 && now.hour < 18;
     });
   }
+
+  
 
   String _monthName(int month) {
     const months = [
@@ -452,7 +551,9 @@ class _HomePageState extends State<HomePage> {
               Expanded(child: _buildStatusCard()),
             ],
           ),
+          
           const SizedBox(height: 20),
+          
           const Text(
             "Recent Fire Incidents",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -637,67 +738,155 @@ class _HomePageState extends State<HomePage> {
   // Modal for viewing alert details
   // ---------------------------------------------------------------
   void _openAlertViewModal(Map<String, dynamic> alert) {
+    final snapshotUrl = alert['snapshotUrl'];
+
+    final userLat = (alert['userLatitude'] as num?)?.toDouble();
+    final userLng = (alert['userLongitude'] as num?)?.toDouble();
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          padding: const EdgeInsets.all(20),
+        child: SizedBox(
           width: 350,
+          height: MediaQuery.of(context).size.height * 0.75,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                "🔥 Incident Details",
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              Text("Type: ${alert['type'] ?? 'Unknown'}"),
-              Text("Location: ${alert['location'] ?? 'Unknown'}"),
-              Text("Reporter: ${alert['userName'] ?? 'N/A'}"),
-              Text("Contact: ${alert['userContact'] ?? 'N/A'}"),
-              Text("Address: ${alert['userAddress'] ?? 'N/A'}"),
-              const SizedBox(height: 12),
-              if (alert['userLatitude'] != null &&
-                  alert['userLongitude'] != null)
-                Text(
-                  "Coordinates: ${alert['userLatitude']}, ${alert['userLongitude']}",
+              // ================= HEADER (STICKY) =================
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.black12)),
                 ),
-              const SizedBox(height: 12),
-              const Text(
-                "🕒 Timestamp:",
-                style: TextStyle(fontWeight: FontWeight.bold),
+                child: const Text(
+                  "🔥 Incident Details",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
               ),
-              Text(
-                alert['timestamp'] != null
-                    ? DateTime.fromMillisecondsSinceEpoch(
-                        alert['timestamp'].seconds * 1000,
-                      ).toString()
-                    : "N/A",
-              ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (alert['userLatitude'] != null &&
-                      alert['userLongitude'] != null)
-                    ElevatedButton(
-                      onPressed: () async {
-                        Navigator.pop(context);
-                        await _openNavigationToAlert(
-                          alertLat: (alert['userLatitude'] as num).toDouble(),
-                          alertLng: (alert['userLongitude'] as num).toDouble(),
-                        );
-                      },
-                      child: const Text("Navigate"),
-                    ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("Close"),
+
+              // ================= SCROLLABLE CONTENT =================
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // FIRE IMAGE
+                      if (snapshotUrl != null &&
+                          snapshotUrl.toString().isNotEmpty)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            snapshotUrl,
+                            height: 210,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, progress) {
+                              if (progress == null) return child;
+                              return const SizedBox(
+                                height: 210,
+                                child: Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                height: 210,
+                                color: Colors.black12,
+                                child: const Center(
+                                  child: Icon(Icons.broken_image, size: 40),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+
+                      if (snapshotUrl != null) const SizedBox(height: 18),
+
+                      // DETAILS
+                      Text("Type: ${alert['type'] ?? 'Unknown'}"),
+                      Text("Location: ${alert['location'] ?? 'Unknown'}"),
+                      Text("Reporter: ${alert['userName'] ?? 'N/A'}"),
+                      Text("Contact: ${alert['userContact'] ?? 'N/A'}"),
+                      Text("Address: ${alert['userAddress'] ?? 'N/A'}"),
+
+                      const SizedBox(height: 12),
+
+                      if (userLat != null && userLng != null)
+                        Text("Coordinates: $userLat, $userLng"),
+
+                      const SizedBox(height: 14),
+
+                      const Text(
+                        "🕒 Timestamp:",
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+
+                      Text(
+                        alert['timestamp'] != null
+                            ? DateTime.fromMillisecondsSinceEpoch(
+                                alert['timestamp'].seconds * 1000,
+                              ).toString()
+                            : "N/A",
+                      ),
+
+                      const SizedBox(height: 20),
+                    ],
                   ),
-                ],
+                ),
+              ),
+
+              // ================= FOOTER BUTTONS (STICKY) =================
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.black12)),
+                ),
+                child: Row(
+                  children: [
+                    if (userLat != null && userLng != null)
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            Navigator.pop(context);
+                            await _openNavigationToAlert(
+                              alertLat: userLat,
+                              alertLng: userLng,
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFA30000),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: const Text("Navigate"),
+                        ),
+                      ),
+
+                    if (userLat != null && userLng != null)
+                      const SizedBox(width: 12),
+
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey.shade700,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text("Close"),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -920,59 +1109,119 @@ class _HomePageState extends State<HomePage> {
     final userLng = (a['userLongitude'] is num)
         ? (a['userLongitude'] as num).toDouble()
         : null;
+    final snapshotUrl = a['snapshotUrl'];
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        padding: const EdgeInsets.all(20),
+      child: SizedBox(
         width: 380,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(
+          children: [
+            // ===================== HEADER (STICKY TITLE) =====================
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.black12)),
+              ),
+              child: const Text(
                 "Alert Details",
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 20),
+            ),
 
-              _infoRow("Type", a['type']),
-              _infoRow("Status", a['status']),
-              _infoRow("Location", a['location']),
+            // ===================== SCROLLABLE CONTENT =====================
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 🔥 FIRE IMAGE
+                    if (snapshotUrl != null &&
+                        snapshotUrl.toString().isNotEmpty)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.network(
+                          snapshotUrl,
+                          height: 210,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (context, child, progress) {
+                            if (progress == null) return child;
+                            return const SizedBox(
+                              height: 210,
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              height: 210,
+                              color: Colors.black12,
+                              child: const Center(
+                                child: Icon(Icons.broken_image, size: 45),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
 
-              const SizedBox(height: 16),
-              const Text(
-                "Reporter Information",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    if (snapshotUrl != null) const SizedBox(height: 20),
+
+                    _infoRow("Type", a['type']),
+                    _infoRow("Status", a['status']),
+                    _infoRow("Location", a['location']),
+
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Reporter Information",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const Divider(),
+
+                    _infoRow("Name", a['userName']),
+                    _infoRow("Contact", a['userContact']),
+                    _infoRow("Address", a['userAddress']),
+
+                    if (userLat != null && userLng != null)
+                      _infoRow("Coordinates", "$userLat, $userLng"),
+
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Timestamp",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const Divider(),
+
+                    Text(
+                      a['timestamp'] != null
+                          ? DateTime.fromMillisecondsSinceEpoch(
+                              a['timestamp'].seconds * 1000,
+                            ).toString()
+                          : "N/A",
+                      style: const TextStyle(fontSize: 14),
+                    ),
+
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
-              const Divider(),
+            ),
 
-              _infoRow("Name", a['userName']),
-              _infoRow("Contact", a['userContact']),
-              _infoRow("Address", a['userAddress']),
-
-              if (userLat != null && userLng != null)
-                _infoRow("Coordinates", "$userLat, $userLng"),
-
-              const SizedBox(height: 16),
-              const Text(
-                "Timestamp",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            // ===================== FOOTER (STICKY BUTTONS) =====================
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Colors.black12)),
               ),
-              const Divider(),
-
-              Text(
-                a['timestamp'] != null
-                    ? DateTime.fromMillisecondsSinceEpoch(
-                        a['timestamp'].seconds * 1000,
-                      ).toString()
-                    : "N/A",
-                style: const TextStyle(fontSize: 14),
-              ),
-
-              const SizedBox(height: 24),
-
-              Row(
+              child: Row(
                 children: [
                   if (userLat != null && userLng != null)
                     Expanded(
@@ -984,9 +1233,9 @@ class _HomePageState extends State<HomePage> {
                           );
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFA30000), // 🔥 Red
-                          foregroundColor: Colors.white, // 🔥 White text
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          backgroundColor: const Color(0xFFA30000),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
@@ -1002,9 +1251,9 @@ class _HomePageState extends State<HomePage> {
                     child: ElevatedButton(
                       onPressed: () => Navigator.pop(context),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFA30000), // 🔥 Red
-                        foregroundColor: Colors.white, // 🔥 White text
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        backgroundColor: Colors.grey.shade700,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
@@ -1014,8 +1263,8 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

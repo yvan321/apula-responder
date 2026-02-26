@@ -5,7 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';  // ⭐ Added
+import 'package:permission_handler/permission_handler.dart'; 
+import 'services/sms_service.dart';
 
 import 'firebase_options.dart';
 
@@ -28,7 +29,16 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  print("🔕 Background Notification: ${message.notification?.title}");
+
+  print("🔥 BACKGROUND FCM RECEIVED");
+  print(message.data);
+
+  // ONLY fire dispatch triggers SMS
+  if (message.data['type'] == 'dispatch') {
+    final address = message.data['address'] ?? "Unknown fire location";
+
+    await SmsService.sendDispatch(location: address);
+  }
 }
 
 /// ---------------------------------------------------------------
@@ -40,14 +50,17 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 Future<void> _setupLocalNotifications() async {
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
     'high_importance_channel',
-    'High Importance Notifications',
-    description: 'Used for critical dispatcher alerts',
-    importance: Importance.high,
+    'Emergency Dispatch Alerts',
+    description: 'Fire dispatch emergency alerts',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
   );
 
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
+        AndroidFlutterLocalNotificationsPlugin
+      >()
       ?.createNotificationChannel(channel);
 
   const InitializationSettings initSettings = InitializationSettings(
@@ -138,8 +151,8 @@ class _MyAppState extends State<MyApp> {
     });
 
     // Terminated state
-    RemoteMessage? initialMessage =
-        await FirebaseMessaging.instance.getInitialMessage();
+    RemoteMessage? initialMessage = await FirebaseMessaging.instance
+        .getInitialMessage();
     if (initialMessage != null) {
       navigatorKey.currentState?.pushNamed('/home');
     }
@@ -154,15 +167,15 @@ class _MyAppState extends State<MyApp> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    await FirebaseFirestore.instance.collection("fcm_tokens").doc(user.uid).set(
-      {
-        "userId": user.uid,
-        "email": user.email,
-        "token": token,
-        "updatedAt": FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
+    await FirebaseFirestore.instance
+        .collection("fcm_tokens")
+        .doc(user.uid)
+        .set({
+          "userId": user.uid,
+          "email": user.email,
+          "token": token,
+          "updatedAt": FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
 
     print("🔥 Token saved for user ${user.uid}");
   }
