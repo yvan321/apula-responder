@@ -1,11 +1,14 @@
-import 'dart:math';
+import 'dart:async';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter/material.dart';
-import 'package:lottie/lottie.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:apula_responder/screens/register/map_picker.dart';
+import 'dart:io';
+import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:lottie/lottie.dart';
+
+import 'package:apula_responder/screens/register/map_picker.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({Key? key}) : super(key: key);
@@ -15,6 +18,12 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
+  // ✅ Google API key (use env later if you want)
+  static const String _googleApiKey = "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680";
+
+  // ✅ REAL PHONE: use your PC IPv4 from ipconfig
+  static const String _verificationBaseUrl = "http://192.168.100.10:3005";
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _contactController = TextEditingController();
@@ -22,6 +31,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   double? selectedLat;
   double? selectedLng;
+
+  bool _isSubmitting = false; // ✅ loading state
 
   @override
   void dispose() {
@@ -33,6 +44,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _showSnackBar(String message, Color bgColor) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -47,6 +60,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _register() async {
+    if (_isSubmitting) return;
+
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final contact = _contactController.text.trim();
@@ -72,9 +87,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
+    setState(() => _isSubmitting = true);
+
     try {
       final code = (100000 + Random().nextInt(900000)).toString();
 
+      // ✅ 1) Save to Firestore
       await FirebaseFirestore.instance.collection('users').add({
         'name': name,
         'email': email,
@@ -85,39 +103,56 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'role': 'responder',
         'platform': 'mobile',
         'verificationCode': code,
-        'verified': false,           // email not verified yet
-        'approved': false,           // waiting for admin approval
-        'status': "Unavailable",     // responder cannot be dispatched yet
+        'verified': false,
+        'approved': false,
+        'status': "Unavailable",
+        'smsOptIn': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      final url = Uri.parse("http://10.238.220.202:3005/send-verification");
+      if (!mounted) return;
 
+      // ✅ 2) Send verification email (REAL PHONE -> PC IPv4)
+      final url = Uri.parse("$_verificationBaseUrl/send-verification");
 
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"email": email, "code": code}),
-      );
+      final response = await http
+          .post(
+            url,
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"email": email, "code": code}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (!mounted) return;
 
       if (response.statusCode == 200) {
         showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (context) {
+          builder: (dialogCtx) {
             Future.delayed(const Duration(seconds: 2), () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(context, '/verification', arguments: email);
+              if (!mounted) return;
+              Navigator.of(dialogCtx).pop(); // close dialog safely
+              Navigator.of(context).pushReplacementNamed(
+                '/verification',
+                arguments: email,
+              );
             });
+
             return AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
                     height: 200,
                     width: 400,
-                    child: Lottie.asset('assets/check orange.json', repeat: false),
+                    child: Lottie.asset(
+                      'assets/check orange.json',
+                      repeat: false,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   const Text(
@@ -135,10 +170,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
           },
         );
       } else {
-        _showSnackBar("Failed to send verification email.", Colors.red);
+        _showSnackBar(
+          "Failed to send verification email (${response.statusCode}): ${response.body}",
+          Colors.red,
+        );
       }
+    } on TimeoutException {
+      _showSnackBar("Request timeout: phone cannot reach PC server.", Colors.red);
+    } on SocketException catch (e) {
+      _showSnackBar("Network error: ${e.message}", Colors.red);
     } catch (e) {
       _showSnackBar("Something went wrong: $e", Colors.red);
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -152,19 +196,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Back Button
               InkWell(
-                onTap: () => Navigator.pop(context),
+                onTap: _isSubmitting ? null : () => Navigator.pop(context),
                 borderRadius: BorderRadius.circular(30),
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: const BoxDecoration(shape: BoxShape.circle),
-                  child: Icon(Icons.chevron_left, size: 30, color: Theme.of(context).colorScheme.primary),
+                  child: Icon(
+                    Icons.chevron_left,
+                    size: 30,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
-
               const SizedBox(height: 20),
-
               const Text(
                 "Create your account",
                 style: TextStyle(
@@ -175,14 +220,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               const SizedBox(height: 40),
 
-              // Name
               TextField(
                 controller: _nameController,
                 decoration: _input("Full Name"),
               ),
               const SizedBox(height: 20),
 
-              // Email
               TextField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
@@ -190,7 +233,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               const SizedBox(height: 20),
 
-              // Contact
               TextField(
                 controller: _contactController,
                 keyboardType: TextInputType.phone,
@@ -202,26 +244,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
               TextField(
                 controller: _addressController,
                 readOnly: true,
-                decoration: _input("Select Station Address (Tap to Open Map)").copyWith(
-                  suffixIcon: const Icon(Icons.map),
-                ),
-                onTap: () async {
-                  final result = await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => MapPickerScreen(),
+                decoration: _input("Select Station Address (Tap to Open Map)")
+                    .copyWith(suffixIcon: const Icon(Icons.map)),
+                onTap: _isSubmitting
+                    ? null
+                    : () async {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const MapPickerScreen(apiKey: _googleApiKey),
+                          ),
+                        );
 
-                    ),
-                  );
+                        if (!mounted) return;
 
-                  if (result != null && result is Map<String, dynamic>) {
-                    setState(() {
-                      _addressController.text = result["address"];
-                      selectedLat = result["lat"];
-                      selectedLng = result["lng"];
-                    });
-                  }
-                },
+                        if (result != null && result is Map<String, dynamic>) {
+                          setState(() {
+                            _addressController.text = (result["address"] ?? "").toString();
+                            selectedLat = (result["lat"] as num?)?.toDouble();
+                            selectedLng = (result["lng"] as num?)?.toDouble();
+                          });
+                        }
+                      },
               ),
 
               const SizedBox(height: 40),
@@ -232,15 +276,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.primary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
-                  onPressed: _register,
-                  child: const Text(
-                    "Register",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
+                  onPressed: _isSubmitting ? null : _register,
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Text(
+                          "Register",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
                 ),
               ),
+
               const SizedBox(height: 30),
             ],
           ),
@@ -252,9 +312,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   InputDecoration _input(String label) {
     return InputDecoration(
       labelText: label,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
     );
   }
 }

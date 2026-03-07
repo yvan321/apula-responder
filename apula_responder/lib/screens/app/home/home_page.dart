@@ -13,7 +13,6 @@ import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
 // NEW imports
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import '/services/sms_service.dart';
 
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -32,7 +31,6 @@ class _HomePageState extends State<HomePage> {
   Timer? _timer;
   bool _isDay = true;
   String? _lastDispatchId;
-  String? _previousDispatchStatus;
 
   // 🔥 Dispatch Tracking
   String _dispatchStatus = "Loading...";
@@ -64,8 +62,6 @@ class _HomePageState extends State<HomePage> {
   @override
 void initState() {
   super.initState();
-
-  SmsService.initialize(); // <-- ADD THIS LINE
 
   _updateTime();
   _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
@@ -261,8 +257,6 @@ void initState() {
             _playDispatchSound();
             _showDispatchNotification();
 
-            // <<< SMS WILL NOW SEND CORRECTLY
-            await SmsService.sendDispatch(location: address);
           }
 
           if (_responderStatus != "Dispatched") {

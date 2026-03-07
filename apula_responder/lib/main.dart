@@ -5,8 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart'; 
-import 'services/sms_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'firebase_options.dart';
 
@@ -32,13 +31,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   print("🔥 BACKGROUND FCM RECEIVED");
   print(message.data);
-
-  // ONLY fire dispatch triggers SMS
-  if (message.data['type'] == 'dispatch') {
-    final address = message.data['address'] ?? "Unknown fire location";
-
-    await SmsService.sendDispatch(location: address);
-  }
 }
 
 /// ---------------------------------------------------------------

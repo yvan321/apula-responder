@@ -12,6 +12,9 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
+  // ✅ Put your key here for now (or move to env later)
+  static const String _googleApiKey = "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680";
+
   final _nameController = TextEditingController();
   final _contactController = TextEditingController();
   final _stationController = TextEditingController();
@@ -30,9 +33,22 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     _loadUserData();
   }
 
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _contactController.dispose();
+    _stationController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
 
     final query = await FirebaseFirestore.instance
         .collection("users")
@@ -42,14 +58,21 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
 
     if (query.docs.isNotEmpty) {
       final doc = query.docs.first;
+      final data = doc.data();
       _docId = doc.id;
 
+      final latVal = data["latitude"];
+      final lngVal = data["longitude"];
+
       setState(() {
-        _nameController.text = doc["name"] ?? "";
-        _contactController.text = doc["contact"] ?? "";
-        _stationController.text = doc["address"] ?? "";
-        selectedLat = doc["latitude"];
-        selectedLng = doc["longitude"];
+        _nameController.text = (data["name"] ?? "").toString();
+        _contactController.text = (data["contact"] ?? "").toString();
+        _stationController.text = (data["address"] ?? "").toString();
+
+        // ✅ safe numeric cast
+        selectedLat = (latVal is num) ? latVal.toDouble() : null;
+        selectedLng = (lngVal is num) ? lngVal.toDouble() : null;
+
         _isLoading = false;
       });
     } else {
@@ -66,6 +89,12 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
 
     if (name.isEmpty || contact.isEmpty || station.isEmpty) {
       _showSnackBar("Please fill in all required fields.", Colors.red);
+      return;
+    }
+
+    // ✅ Require map selection if your app needs coordinates
+    if (selectedLat == null || selectedLng == null) {
+      _showSnackBar("Please select an address on the map.", Colors.red);
       return;
     }
 
@@ -88,7 +117,7 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           "address": station,
           "latitude": selectedLat,
           "longitude": selectedLng,
-            "updatedAt": FieldValue.serverTimestamp(),   // ✅ ADDED
+          "updatedAt": FieldValue.serverTimestamp(),
         });
       }
 
@@ -96,10 +125,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
         await FirebaseAuth.instance.currentUser!.updatePassword(pass);
       }
 
-      Navigator.pop(context);
+      Navigator.pop(context); // close loading dialog
       _showSuccessDialog("Changes saved successfully!");
     } catch (e) {
-      Navigator.pop(context);
+      Navigator.pop(context); // close loading dialog
       _showSnackBar("Error: $e", Colors.red);
     }
   }
@@ -142,8 +171,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       barrierDismissible: false,
       builder: (context) {
         Future.delayed(const Duration(seconds: 2), () {
-          Navigator.pop(context);
-          Navigator.pop(context);
+          Navigator.pop(context); // close success dialog
+          Navigator.pop(context); // back
         });
 
         return AlertDialog(
@@ -151,7 +180,12 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Lottie.asset('assets/check orange.json', width: 150, height: 150, repeat: false),
+              Lottie.asset(
+                'assets/check orange.json',
+                width: 150,
+                height: 150,
+                repeat: false,
+              ),
               const SizedBox(height: 20),
               Text(
                 msg,
@@ -187,7 +221,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                       child: const Icon(Icons.chevron_left, size: 30, color: redColor),
                     ),
                   ),
-
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 20, vertical: 20),
                     child: Text(
@@ -199,7 +232,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                       ),
                     ),
                   ),
-
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(20),
@@ -211,14 +243,13 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                               decoration: _input("Name"),
                             ),
                             const SizedBox(height: 20),
-
                             TextField(
                               controller: _contactController,
                               decoration: _input("Contact Number"),
                             ),
                             const SizedBox(height: 20),
 
-                            // ⭐ MAP PICKER HERE
+                            // ⭐ MAP PICKER HERE (FIXED)
                             TextField(
                               controller: _stationController,
                               readOnly: true,
@@ -230,37 +261,38 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) => MapPickerScreen(
+                                      apiKey: _googleApiKey,
                                       initialAddress: _stationController.text,
+                                      initialLat: selectedLat,
+                                      initialLng: selectedLng,
                                     ),
                                   ),
                                 );
 
                                 if (result != null && result is Map<String, dynamic>) {
                                   setState(() {
-                                    _stationController.text = result["address"];
-                                    selectedLat = result["lat"];
-                                    selectedLng = result["lng"];
+                                    _stationController.text =
+                                        (result["address"] ?? "").toString();
+                                    selectedLat = (result["lat"] as num?)?.toDouble();
+                                    selectedLng = (result["lng"] as num?)?.toDouble();
                                   });
                                 }
                               },
                             ),
 
                             const SizedBox(height: 20),
-
                             TextField(
                               controller: _passwordController,
                               obscureText: true,
                               decoration: _input("New Password (optional)"),
                             ),
                             const SizedBox(height: 20),
-
                             TextField(
                               controller: _confirmPasswordController,
                               obscureText: true,
                               decoration: _input("Confirm Password"),
                             ),
                             const SizedBox(height: 30),
-
                             SizedBox(
                               width: double.infinity,
                               height: 50,

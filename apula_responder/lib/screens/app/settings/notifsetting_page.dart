@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '/services/sms_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class NotifSettingsPage extends StatefulWidget {
   const NotifSettingsPage({super.key});
@@ -13,9 +13,7 @@ class NotifSettingsPage extends StatefulWidget {
 class _NotifSettingsPageState extends State<NotifSettingsPage> {
   bool _sendViaSms = false;
 
-  final TextEditingController _phoneController = TextEditingController(
-    text: "+639123456789",
-  );
+  final TextEditingController _phoneController = TextEditingController();
 
   @override
   void initState() {
@@ -23,35 +21,54 @@ class _NotifSettingsPageState extends State<NotifSettingsPage> {
     _loadSettings();
   }
 
-  // LOAD SAVED SETTINGS
   Future<void> _loadSettings() async {
-    final settings = await SmsService.loadSettings();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
 
-    setState(() {
-      _sendViaSms = settings["enabled"];
-      _phoneController.text = settings["number"].isEmpty
-          ? "+639XXXXXXXXX"
-          : settings["number"];
-    });
+    final query = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (query.docs.isNotEmpty) {
+      final data = query.docs.first.data();
+
+      setState(() {
+        _sendViaSms = data['smsOptIn'] ?? false;
+        _phoneController.text = (data['contact'] ?? "").toString();
+      });
+    }
   }
 
-  // SAVE SETTINGS
-  void _saveSettings() async {
+  Future<void> _saveSettings() async {
     if (_sendViaSms && _phoneController.text.trim().isEmpty) {
       _showSnackBar("Please enter responder phone number.", Colors.red);
       return;
     }
 
-    await SmsService.saveSettings(
-      enabled: _sendViaSms,
-      number: _phoneController.text.trim(),
-    );
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final query = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final docId = query.docs.first.id;
+
+    await FirebaseFirestore.instance.collection('users').doc(docId).update({
+      'smsOptIn': _sendViaSms,
+      'contact': _phoneController.text.trim(),
+    });
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) =>
-          _loadingDialog("Saving your notification settings..."),
+      builder: (context) => _loadingDialog("Saving your notification settings..."),
     );
 
     Future.delayed(const Duration(seconds: 2), () {
@@ -180,7 +197,6 @@ class _NotifSettingsPageState extends State<NotifSettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Back button
             Padding(
               padding: const EdgeInsets.only(left: 10, top: 10),
               child: InkWell(
@@ -225,24 +241,16 @@ class _NotifSettingsPageState extends State<NotifSettingsPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             SwitchListTile(
-                              title: const Text(
-                                "Send Dispatch SMS to Responder",
-                              ),
+                              title: const Text("Send Dispatch SMS to Responder"),
                               activeColor: redColor,
                               value: _sendViaSms,
                               onChanged: (value) async {
                                 if (value == true) {
                                   bool accepted = await _showSmsDisclaimer();
-
                                   if (!accepted) return;
-
-                                  setState(() {
-                                    _sendViaSms = true;
-                                  });
+                                  setState(() => _sendViaSms = true);
                                 } else {
-                                  setState(() {
-                                    _sendViaSms = false;
-                                  });
+                                  setState(() => _sendViaSms = false);
                                 }
                               },
                             ),
@@ -255,10 +263,8 @@ class _NotifSettingsPageState extends State<NotifSettingsPage> {
                               keyboardType: TextInputType.phone,
                               decoration: InputDecoration(
                                 labelText: "Responder Phone Number",
-                                hintText: "+639XXXXXXXXX",
-                                prefixIcon: const Icon(
-                                  Icons.local_fire_department,
-                                ),
+                                hintText: "+639XXXXXXXXX or 09XXXXXXXXX",
+                                prefixIcon: const Icon(Icons.local_fire_department),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(10),
                                 ),
@@ -269,7 +275,7 @@ class _NotifSettingsPageState extends State<NotifSettingsPage> {
                               Padding(
                                 padding: const EdgeInsets.only(top: 8.0),
                                 child: Text(
-                                  "Enable SMS to send fire dispatch alerts.",
+                                  "Enable SMS to receive fire dispatch alerts.",
                                   style: TextStyle(
                                     color: Colors.grey[600],
                                     fontSize: 13,
