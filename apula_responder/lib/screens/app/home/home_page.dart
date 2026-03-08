@@ -946,28 +946,49 @@ void initState() {
             ],
           ),
           // 🔥 NEW: Buttons under the address
-          if (_dispatchStatus == "Dispatched") ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      _stopAlarm();
-                      _openAlertDetails();
-                    },
-                    child: const Text("View"),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _markAsResolved,
-                    child: const Text("Resolve"),
-                  ),
-                ),
-              ],
-            ),
+         if (_dispatchStatus == "Dispatched") ...[
+  const SizedBox(height: 12),
+
+  Row(
+    children: [
+      Expanded(
+        child: ElevatedButton(
+          onPressed: () {
+            _stopAlarm();
+            _openAlertDetails();
+          },
+          child: const Text("View"),
+        ),
+      ),
+
+      const SizedBox(width: 10),
+
+      Expanded(
+        child: ElevatedButton(
+          onPressed: _markAsResolved,
+          child: const Text("Resolve"),
+        ),
+      ),
+    ],
+  ),
+
+  const SizedBox(height: 10),
+
+  // 🔥 NEW BACKUP BUTTON
+  SizedBox(
+    width: double.infinity,
+    child: ElevatedButton.icon(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
+      icon: const Icon(Icons.group_add),
+      label: const Text("Call Backup"),
+      onPressed: _callBackup,
+    ),
+  ),
+],
+
           ],
         ],
       ),
@@ -1060,6 +1081,63 @@ void initState() {
       debugPrint("Error: $e");
     }
   }
+
+  // ---------------------------------------------------------------
+// 🚒 CALL BACKUP
+// ---------------------------------------------------------------
+Future<void> _callBackup() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+
+    final query = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('responderEmails', arrayContains: user.email)
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    final dispatchDoc = query.docs.first;
+    final data = dispatchDoc.data();
+
+    final dispatchId = dispatchDoc.id;
+    final alertId = data['alertId'];
+    final address = data['userAddress'] ?? "";
+
+    // 🔥 Check if backup already exists
+    final existingBackup = await FirebaseFirestore.instance
+        .collection("backup")
+        .where("dispatchId", isEqualTo: dispatchId)
+        .get();
+
+    if (existingBackup.docs.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Backup already requested.")),
+      );
+      return;
+    }
+
+    // 🔥 Create backup request
+    await FirebaseFirestore.instance.collection("backup").add({
+      "dispatchId": dispatchId,
+      "alertId": alertId,
+      "requestedBy": user.email,
+      "address": address,
+      "timestamp": FieldValue.serverTimestamp(),
+      "status": "Pending"
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("🚒 Backup request sent.")),
+    );
+
+  } catch (e) {
+    debugPrint("Backup request error: $e");
+  }
+}
 
   // ---------------------------------------------------------------
   // Alert Details Modal (for responder assigned alert)
