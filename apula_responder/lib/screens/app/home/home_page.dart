@@ -1,22 +1,20 @@
 // lib/screens/app/home/home_page.dart
 import 'dart:async';
+import 'dart:io';
+
 import 'package:apula_responder/screens/app/dispatch/dispatch_page.dart';
+import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
 import 'package:apula_responder/screens/app/notifications/notification_page.dart';
 import 'package:apula_responder/screens/app/settings/settings_page.dart';
-import 'package:flutter/material.dart';
 import 'package:apula_responder/widgets/custom_bottom_nav.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
-
-// NEW imports
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-
-import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -52,25 +50,32 @@ class _HomePageState extends State<HomePage> {
   // ------------------------
   final AudioPlayer _player = AudioPlayer();
   bool _hasPlayedSound = false;
-
   int _unreadNotifCount = 0;
 
-  // Local notifications instance (safe to create a local instance here)
+  // ------------------------
+  // Backup Request State
+  // ------------------------
+  bool _isRequestingBackup = false;
+  bool _hasPendingBackupRequest = false;
+  int _currentWaveNumber = 1;
+  String? _currentDispatchId;
+  String? _currentAlertId;
+
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
 
   @override
-void initState() {
-  super.initState();
+  void initState() {
+    super.initState();
 
-  _updateTime();
-  _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
-  _listenToDispatchStatus();
-  _loadRecentAlerts();
-  _getResponderStatus();
-  _listenUnreadNotifications();
-  _initializeLocalNotifications();
-}
+    _updateTime();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+    _listenToDispatchStatus();
+    _loadRecentAlerts();
+    _getResponderStatus();
+    _listenUnreadNotifications();
+    _initializeLocalNotifications();
+  }
 
   Future<void> _initializeLocalNotifications() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -78,11 +83,7 @@ void initState() {
     try {
       await _localNotifications.initialize(
         initSettings,
-        onDidReceiveNotificationResponse: (response) {
-          // navigate to home if tapped
-          // Using navigatorKey from main.dart would be ideal; here we just attempt a safe push
-          // (If you have a global navigatorKey, you could call it instead)
-        },
+        onDidReceiveNotificationResponse: (response) {},
       );
     } catch (e) {
       debugPrint("Local notifications init error: $e");
@@ -99,15 +100,13 @@ void initState() {
         .where('read', isEqualTo: false)
         .snapshots()
         .listen((snapshot) {
-          setState(() {
-            _unreadNotifCount = snapshot.docs.length;
-          });
-        });
+      if (!mounted) return;
+      setState(() {
+        _unreadNotifCount = snapshot.docs.length;
+      });
+    });
   }
 
-  // ---------------------------------------------------------------
-  // Download image from snapshotUrl and save locally
-  // ---------------------------------------------------------------
   Future<String?> _downloadAndSaveImage(String url, String fileName) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
@@ -128,9 +127,6 @@ void initState() {
     return null;
   }
 
-  // ---------------------------------------------------------------
-  // 🔥 Load Responder Status (uses EXACT email)
-  // ---------------------------------------------------------------
   Future<void> _getResponderStatus() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -144,6 +140,7 @@ void initState() {
 
       if (snap.docs.isNotEmpty) {
         final data = snap.docs.first.data() as Map<String, dynamic>;
+        if (!mounted) return;
         setState(() {
           _responderStatus = data['status'] ?? "Available";
         });
@@ -153,9 +150,6 @@ void initState() {
     }
   }
 
-  // ---------------------------------------------------------------
-  // 🔥 Toggle Responder Status
-  // ---------------------------------------------------------------
   Future<void> _toggleResponderStatus() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -167,7 +161,6 @@ void initState() {
     } else if (_responderStatus == "Unavailable") {
       newStatus = "Available";
     } else if (_responderStatus == "Dispatched") {
-      // DO NOT CHANGE STATUS WHEN DISPATCHED
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Cannot change status while dispatched.")),
       );
@@ -184,9 +177,9 @@ void initState() {
           .get();
 
       if (snap.docs.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("User doc not found.")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("User doc not found.")),
+        );
         return;
       }
 
@@ -196,15 +189,149 @@ void initState() {
         'status': newStatus,
       });
 
+      if (!mounted) return;
       setState(() => _responderStatus = newStatus);
     } catch (e) {
       debugPrint("Status toggle error: $e");
     }
   }
 
-  // ---------------------------------------------------------------
-  // 🔥 REAL-TIME DISPATCH LISTENER
-  // ---------------------------------------------------------------
+  Future<void> _checkPendingBackupRequest(String dispatchId) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('backup_requests')
+          .where('sourceDispatchId', isEqualTo: dispatchId)
+          .where('status', isEqualTo: 'Pending')
+          .limit(1)
+          .get();
+
+      if (!mounted) return;
+      setState(() {
+        _hasPendingBackupRequest = snap.docs.isNotEmpty;
+      });
+    } catch (e) {
+      debugPrint("Check backup request error: $e");
+    }
+  }
+
+  // ✅ NO dispatches composite query here anymore
+  Future<void> _requestBackup() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (_isRequestingBackup) return;
+
+    if (_currentDispatchId == null || _currentAlertId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No active dispatch found.")),
+      );
+      return;
+    }
+
+    setState(() => _isRequestingBackup = true);
+
+    try {
+      final dispatchDoc = await FirebaseFirestore.instance
+          .collection('dispatches')
+          .doc(_currentDispatchId)
+          .get();
+
+      if (!dispatchDoc.exists) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Dispatch record not found.")),
+        );
+        return;
+      }
+
+      final dispatchData = dispatchDoc.data() as Map<String, dynamic>;
+
+      if (dispatchData['status'] != 'Dispatched') {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Backup can only be requested while dispatched."),
+          ),
+        );
+        return;
+      }
+
+      final existing = await FirebaseFirestore.instance
+          .collection('backup_requests')
+          .where('sourceDispatchId', isEqualTo: _currentDispatchId)
+          .where('status', isEqualTo: 'Pending')
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        if (!mounted) return;
+
+        setState(() {
+          _hasPendingBackupRequest = true;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Backup request already sent.")),
+        );
+        return;
+      }
+
+      final responderSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('email', isEqualTo: user.email)
+          .limit(1)
+          .get();
+
+      String responderName = "Responder";
+      if (responderSnap.docs.isNotEmpty) {
+        final responderData =
+            responderSnap.docs.first.data() as Map<String, dynamic>;
+        responderName = responderData['name'] ?? "Responder";
+      }
+
+      await FirebaseFirestore.instance.collection('backup_requests').add({
+        'alertId': _currentAlertId,
+        'sourceDispatchId': _currentDispatchId,
+        'requestedWaveNumber': _currentWaveNumber + 1,
+        'requestedByName': responderName,
+        'requestedByEmail': user.email,
+        'reason': 'Fire too strong',
+        'status': 'Pending',
+        'approvedDispatchId': '',
+        'approvedBy': '',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      await FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(_currentAlertId)
+          .update({
+        'backupRequestCount': FieldValue.increment(1),
+      });
+
+      if (!mounted) return;
+
+      setState(() {
+        _hasPendingBackupRequest = true;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Backup request sent to admin.")),
+      );
+    } catch (e) {
+      debugPrint("Request backup error: $e");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to request backup: $e")),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isRequestingBackup = false);
+      }
+    }
+  }
+
   void _listenToDispatchStatus() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -218,46 +345,56 @@ void initState() {
     _dispatchSub = dispatchRef.snapshots().listen(
       (snapshot) async {
         if (snapshot.docs.isEmpty) {
-          // No dispatch → ensure responder is Available (unless manually Unavailable)
           if (_responderStatus != "Unavailable") {
             await _updateUserStatus("Available");
           }
 
+          if (!mounted) return;
           setState(() {
             _dispatchStatus = "No Active Dispatch 🔒";
             _callerAddress = "";
+            _currentDispatchId = null;
+            _currentAlertId = null;
+            _currentWaveNumber = 1;
+            _hasPendingBackupRequest = false;
           });
 
-          // reset sound guard
           _hasPlayedSound = false;
           return;
         }
 
-        // There IS a dispatch
-        final data = snapshot.docs.first.data();
+        final docSnap = snapshot.docs.first;
+        final data = docSnap.data();
         final status = data["status"];
         final address = data["userAddress"] ?? "";
 
+        final dynamic rawWave = data["waveNumber"];
+        final int parsedWave =
+            rawWave is int ? rawWave : int.tryParse(rawWave.toString()) ?? 1;
+
+        if (!mounted) return;
         setState(() {
           _dispatchStatus = status;
           _callerAddress = address;
+          _currentDispatchId = docSnap.id;
+          _currentAlertId = data["alertId"];
+          _currentWaveNumber = parsedWave;
         });
 
-        // UPDATE UI & Firestore BASED ON DISPATCH STATUS
         if (status == "Dispatched") {
-          final newDispatchId = snapshot.docs.first.id;
+          final newDispatchId = docSnap.id;
 
-          // ONLY when a NEW dispatch document appears
           if (_lastDispatchId != newDispatchId) {
             _lastDispatchId = newDispatchId;
 
-            print("🔥 NEW DISPATCH DETECTED");
-            print("📍 Address: $address");
+            debugPrint("🔥 NEW DISPATCH DETECTED");
+            debugPrint("📍 Address: $address");
 
             _playDispatchSound();
             _showDispatchNotification();
-
           }
+
+          await _checkPendingBackupRequest(newDispatchId);
 
           if (_responderStatus != "Dispatched") {
             await _updateUserStatus("Dispatched");
@@ -265,17 +402,16 @@ void initState() {
         }
 
         if (status == "Resolved") {
-          // reset sound guard
           _hasPlayedSound = false;
 
-          // Automatically return responder to Available
           if (_responderStatus != "Unavailable") {
             await _updateUserStatus("Available");
           }
 
-          // And show UI
+          if (!mounted) return;
           setState(() {
             _dispatchStatus = "Resolved";
+            _hasPendingBackupRequest = false;
           });
         }
       },
@@ -285,24 +421,14 @@ void initState() {
     );
   }
 
-  // ---------------------------------------------------------------
-  // 🔥 Play dispatch sound (asset)
-  // ---------------------------------------------------------------
   Future<void> _playDispatchSound() async {
     try {
-      // file path relative to assets listed in pubspec: assets/sounds/fire_alarm.mp3
       await _player.play(AssetSource('sounds/fire_alarm.mp3'));
     } catch (e) {
       debugPrint("Error playing sound: $e");
     }
   }
 
-  // ---------------------------------------------------------------
-  // 🔔 Show local notification (uses same channel id as main.dart)
-  // ---------------------------------------------------------------
-  // ---------------------------------------------------------------
-  // 🔔 Show DISPATCH notification WITH IMAGE
-  // ---------------------------------------------------------------
   Future<void> _showDispatchNotification() async {
     try {
       String? imagePath;
@@ -310,7 +436,6 @@ void initState() {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // 🔥 get latest dispatch document
       final query = await FirebaseFirestore.instance
           .collection('dispatches')
           .where('responderEmails', arrayContains: user.email)
@@ -327,7 +452,6 @@ void initState() {
 
         final snapshotUrl = data['snapshotUrl'];
 
-        // 🔥 Download the fire image
         if (snapshotUrl != null && snapshotUrl.toString().isNotEmpty) {
           imagePath = await _downloadAndSaveImage(
             snapshotUrl,
@@ -338,7 +462,6 @@ void initState() {
 
       AndroidNotificationDetails androidDetails;
 
-      // ---------- WITH IMAGE ----------
       if (imagePath != null) {
         final bigPictureStyle = BigPictureStyleInformation(
           FilePathAndroidBitmap(imagePath),
@@ -356,9 +479,7 @@ void initState() {
           playSound: true,
           icon: '@mipmap/ic_launcher',
         );
-      }
-      // ---------- WITHOUT IMAGE ----------
-      else {
+      } else {
         androidDetails = const AndroidNotificationDetails(
           'high_importance_channel',
           'High Importance Notifications',
@@ -384,9 +505,6 @@ void initState() {
     }
   }
 
-  // ---------------------------------------------------------------
-  // 🔥 Load Recent Alerts
-  // ---------------------------------------------------------------
   Future<void> _loadRecentAlerts() async {
     final query = await FirebaseFirestore.instance
         .collection('alerts')
@@ -400,18 +518,18 @@ void initState() {
       return data;
     }).toList();
 
+    if (!mounted) return;
     setState(() {
       _recentAlerts = alerts;
     });
   }
-  
 
-  // TIME & DATE
   void _updateTime() {
     final now = DateTime.now();
     final hour = now.hour % 12 == 0 ? 12 : now.hour % 12;
     final period = now.hour >= 12 ? "PM" : "AM";
 
+    if (!mounted) return;
     setState(() {
       _time =
           "$hour:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} $period";
@@ -419,8 +537,6 @@ void initState() {
       _isDay = now.hour >= 6 && now.hour < 18;
     });
   }
-
-  
 
   String _monthName(int month) {
     const months = [
@@ -444,7 +560,7 @@ void initState() {
   void dispose() {
     _timer?.cancel();
     _dispatchSub?.cancel();
-    _player.dispose(); // release audio resources
+    _player.dispose();
     super.dispose();
   }
 
@@ -469,6 +585,7 @@ void initState() {
         'status': newStatus,
       });
 
+      if (!mounted) return;
       setState(() {
         _responderStatus = newStatus;
       });
@@ -477,9 +594,6 @@ void initState() {
     }
   }
 
-  // ---------------------------------------------------------------
-  //                     MAIN UI STARTS HERE
-  // ---------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -517,14 +631,11 @@ void initState() {
       bottomNavigationBar: CustomBottomNavBar(
         selectedIndex: _selectedIndex,
         onItemTapped: _onItemTapped,
-        notifCount: _unreadNotifCount, // 🔥 ADD BADGE SUPPORT
+        notifCount: _unreadNotifCount,
       ),
     );
   }
 
-  // ---------------------------------------------------------------
-  // Dashboard UI
-  // ---------------------------------------------------------------
   Widget _buildDashboard(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -545,9 +656,7 @@ void initState() {
               Expanded(child: _buildStatusCard()),
             ],
           ),
-          
           const SizedBox(height: 20),
-          
           const Text(
             "Recent Fire Incidents",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -564,9 +673,6 @@ void initState() {
     );
   }
 
-  // ---------------------------------------------------------------
-  // Status Toggle Card
-  // ---------------------------------------------------------------
   Widget _buildStatusCard() {
     Color startColor, endColor;
     IconData icon;
@@ -622,49 +728,43 @@ void initState() {
     );
   }
 
-  // ---------------------------------------------------------------
-  // Time Card UI
-  // ---------------------------------------------------------------
   Widget _buildTimeCard() => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: _isDay
-            ? [Colors.yellow.shade200, Colors.orange.shade300]
-            : [Colors.indigo.shade700, Colors.indigo.shade900],
-      ),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(
-          _isDay ? Icons.wb_sunny : Icons.nightlight_round,
-          color: _isDay ? Colors.black : Colors.white,
-          size: 28,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _time,
-          style: TextStyle(
-            color: _isDay ? Colors.black : Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: _isDay
+                ? [Colors.yellow.shade200, Colors.orange.shade300]
+                : [Colors.indigo.shade700, Colors.indigo.shade900],
           ),
+          borderRadius: BorderRadius.circular(16),
         ),
-        Text(
-          _date,
-          style: TextStyle(
-            color: (_isDay ? Colors.black : Colors.white).withOpacity(0.7),
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              _isDay ? Icons.wb_sunny : Icons.nightlight_round,
+              color: _isDay ? Colors.black : Colors.white,
+              size: 28,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _time,
+              style: TextStyle(
+                color: _isDay ? Colors.black : Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              _date,
+              style: TextStyle(
+                color: (_isDay ? Colors.black : Colors.white).withOpacity(0.7),
+              ),
+            ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 
-  // ---------------------------------------------------------------
-  // Recent Alerts UI
-  // ---------------------------------------------------------------
   Widget _recentIncidentCard(Map<String, dynamic> alert) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -676,7 +776,7 @@ void initState() {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 3)),
         ],
       ),
@@ -688,19 +788,17 @@ void initState() {
             size: 28,
           ),
           const SizedBox(width: 12),
-          // 🔥 Address text (SMALLER + NOT BOLD)
           Expanded(
             child: Text(
               alert['userAddress'] ?? "Unknown Address",
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 13, // smaller
-                fontWeight: FontWeight.normal, // not bold
+                fontSize: 13,
+                fontWeight: FontWeight.normal,
               ),
             ),
           ),
           const SizedBox(width: 12),
-          // 🔥 View button
           ElevatedButton(
             onPressed: () {
               _openAlertViewModal(alert);
@@ -722,18 +820,14 @@ void initState() {
 
   void _stopAlarm() {
     try {
-      _player.stop(); // stop audio immediately
+      _player.stop();
     } catch (_) {}
 
-    _hasPlayedSound = true; // prevent replay for this dispatch
+    _hasPlayedSound = true;
   }
 
-  // ---------------------------------------------------------------
-  // Modal for viewing alert details
-  // ---------------------------------------------------------------
   void _openAlertViewModal(Map<String, dynamic> alert) {
     final snapshotUrl = alert['snapshotUrl'];
-
     final userLat = (alert['userLatitude'] as num?)?.toDouble();
     final userLng = (alert['userLongitude'] as num?)?.toDouble();
 
@@ -746,7 +840,6 @@ void initState() {
           height: MediaQuery.of(context).size.height * 0.75,
           child: Column(
             children: [
-              // ================= HEADER (STICKY) =================
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
@@ -758,15 +851,12 @@ void initState() {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
               ),
-
-              // ================= SCROLLABLE CONTENT =================
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // FIRE IMAGE
                       if (snapshotUrl != null &&
                           snapshotUrl.toString().isNotEmpty)
                         ClipRRect(
@@ -796,28 +886,20 @@ void initState() {
                             },
                           ),
                         ),
-
                       if (snapshotUrl != null) const SizedBox(height: 18),
-
-                      // DETAILS
                       Text("Type: ${alert['type'] ?? 'Unknown'}"),
                       Text("Location: ${alert['location'] ?? 'Unknown'}"),
                       Text("Reporter: ${alert['userName'] ?? 'N/A'}"),
                       Text("Contact: ${alert['userContact'] ?? 'N/A'}"),
                       Text("Address: ${alert['userAddress'] ?? 'N/A'}"),
-
                       const SizedBox(height: 12),
-
                       if (userLat != null && userLng != null)
                         Text("Coordinates: $userLat, $userLng"),
-
                       const SizedBox(height: 14),
-
                       const Text(
                         "🕒 Timestamp:",
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
-
                       Text(
                         alert['timestamp'] != null
                             ? DateTime.fromMillisecondsSinceEpoch(
@@ -825,14 +907,11 @@ void initState() {
                               ).toString()
                             : "N/A",
                       ),
-
                       const SizedBox(height: 20),
                     ],
                   ),
                 ),
               ),
-
-              // ================= FOOTER BUTTONS (STICKY) =================
               Container(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                 decoration: const BoxDecoration(
@@ -861,10 +940,8 @@ void initState() {
                           child: const Text("Navigate"),
                         ),
                       ),
-
                     if (userLat != null && userLng != null)
                       const SizedBox(width: 12),
-
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () => Navigator.pop(context),
@@ -889,9 +966,6 @@ void initState() {
     );
   }
 
-  // ---------------------------------------------------------------
-  // DISPATCH Status Card UI
-  // ---------------------------------------------------------------
   Widget _buildDispatchStatusCard() {
     Color startColor, endColor;
     IconData icon;
@@ -940,208 +1014,205 @@ void initState() {
                         "Address: $_callerAddress",
                         style: const TextStyle(color: Colors.white70),
                       ),
+                    if (_dispatchStatus == "Dispatched")
+                      Text(
+                        "Wave: $_currentWaveNumber",
+                        style: const TextStyle(color: Colors.white70),
+                      ),
                   ],
                 ),
               ),
             ],
           ),
-          // 🔥 NEW: Buttons under the address
-         if (_dispatchStatus == "Dispatched") ...[
-  const SizedBox(height: 12),
-
-  Row(
-    children: [
-      Expanded(
-        child: ElevatedButton(
-          onPressed: () {
-            _stopAlarm();
-            _openAlertDetails();
-          },
-          child: const Text("View"),
-        ),
-      ),
-
-      const SizedBox(width: 10),
-
-      Expanded(
-        child: ElevatedButton(
-          onPressed: _markAsResolved,
-          child: const Text("Resolve"),
-        ),
-      ),
-    ],
-  ),
-
-  const SizedBox(height: 10),
-
-  // 🔥 NEW BACKUP BUTTON
-  SizedBox(
-    width: double.infinity,
-    child: ElevatedButton.icon(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-      ),
-      icon: const Icon(Icons.group_add),
-      label: const Text("Call Backup"),
-      onPressed: _callBackup,
-    ),
-  ),
-],
-
+          if (_dispatchStatus == "Dispatched") ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      _stopAlarm();
+                      _openAlertDetails();
+                    },
+                    child: const Text("View"),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _markAsResolved,
+                    child: const Text("Resolve"),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: (_hasPendingBackupRequest || _isRequestingBackup)
+                    ? null
+                    : _requestBackup,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black87,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                icon: _isRequestingBackup
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.group_add),
+                label: Text(
+                  _hasPendingBackupRequest
+                      ? "Backup Requested"
+                      : "Request Backup",
+                ),
+              ),
+            ),
           ],
         ],
       ),
     );
   }
 
-  // ---------------------------------------------------------------
-  // View Dispatch Details
-  // ---------------------------------------------------------------
-
+  // ✅ NO dispatches query here anymore
   void _openAlertDetails() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final query = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email)
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) return;
-
-    final data = query.docs.first.data();
-    final alertId = data["alertId"];
-    if (alertId == null) return;
+    if (_currentAlertId == null) return;
 
     final snap = await FirebaseFirestore.instance
         .collection("alerts")
-        .doc(alertId)
+        .doc(_currentAlertId)
         .get();
 
     if (!snap.exists) return;
 
+    if (!mounted) return;
     setState(() {
       _alertData = snap.data();
       _showAlertModal = true;
     });
   }
 
-  // ---------------------------------------------------------------
-  // MARK AS RESOLVED
-  // ---------------------------------------------------------------
+  // ✅ NO dispatches query here anymore
   void _markAsResolved() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final query = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email)
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) return;
-
-    final dispatchDoc = query.docs.first;
-    final dispatchId = dispatchDoc.id;
-    final data = dispatchDoc.data();
-
-    final alertId = data["alertId"];
-    final responders = data["responders"] as List<dynamic>;
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('dispatches')
-          .doc(dispatchId)
-          .update({'status': 'Resolved'});
-
-      if (alertId != null) {
-        await FirebaseFirestore.instance
-            .collection('alerts')
-            .doc(alertId)
-            .update({'status': 'Resolved'});
-      }
-
-      for (var r in responders) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(r["id"])
-            .update({'status': 'Available'});
-      }
-
-      setState(() => _dispatchStatus = "Resolved");
-
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Dispatch resolved.")));
-    } catch (e) {
-      debugPrint("Error: $e");
-    }
-  }
-
-  // ---------------------------------------------------------------
-// 🚒 CALL BACKUP
-// ---------------------------------------------------------------
-Future<void> _callBackup() async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
+  if (_currentDispatchId == null) return;
 
   try {
-
-    final query = await FirebaseFirestore.instance
+    final currentDispatch = await FirebaseFirestore.instance
         .collection('dispatches')
-        .where('responderEmails', arrayContains: user.email)
-        .orderBy('timestamp', descending: true)
-        .limit(1)
+        .doc(_currentDispatchId)
         .get();
 
-    if (query.docs.isEmpty) return;
+    if (!currentDispatch.exists) return;
 
-    final dispatchDoc = query.docs.first;
-    final data = dispatchDoc.data();
+    final currentData = currentDispatch.data() as Map<String, dynamic>;
+    final alertId = currentData["alertId"];
 
-    final dispatchId = dispatchDoc.id;
-    final alertId = data['alertId'];
-    final address = data['userAddress'] ?? "";
+    if (alertId == null) return;
 
-    // 🔥 Check if backup already exists
-    final existingBackup = await FirebaseFirestore.instance
-        .collection("backup")
-        .where("dispatchId", isEqualTo: dispatchId)
+    // Get ALL dispatches under the same alert
+    final dispatches = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('alertId', isEqualTo: alertId)
         .get();
 
-    if (existingBackup.docs.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Backup already requested.")),
-      );
-      return;
+    final batch = FirebaseFirestore.instance.batch();
+
+    final Set<String> responderIds = {};
+    final Set<String> teamIds = {};
+    final Set<String> teamNames = {};
+
+    for (final doc in dispatches.docs) {
+      final data = doc.data();
+
+      // Resolve dispatch
+      batch.update(doc.reference, {
+        'status': 'Resolved',
+      });
+
+      final responders = (data["responders"] as List<dynamic>? ?? []);
+
+      for (final r in responders) {
+        if (r["id"] != null) {
+          responderIds.add(r["id"]);
+        }
+
+        if (r["teamId"] != null) {
+          teamIds.add(r["teamId"]);
+        }
+
+        if (r["team"] != null) {
+          teamNames.add(r["team"]);
+        }
+      }
     }
 
-    // 🔥 Create backup request
-    await FirebaseFirestore.instance.collection("backup").add({
-      "dispatchId": dispatchId,
-      "alertId": alertId,
-      "requestedBy": user.email,
-      "address": address,
-      "timestamp": FieldValue.serverTimestamp(),
-      "status": "Pending"
+    // Resolve alert
+    batch.update(
+      FirebaseFirestore.instance.collection('alerts').doc(alertId),
+      {'status': 'Resolved'},
+    );
+
+    // Reset responders
+    for (final id in responderIds) {
+      batch.update(
+        FirebaseFirestore.instance.collection('users').doc(id),
+        {'status': 'Available'},
+      );
+    }
+
+    // Reset teams
+    for (final id in teamIds) {
+      batch.update(
+        FirebaseFirestore.instance.collection('teams').doc(id),
+        {'status': 'Available'},
+      );
+    }
+
+    // Reset vehicles
+    for (final teamName in teamNames) {
+      final vehicles = await FirebaseFirestore.instance
+          .collection('vehicles')
+          .where('assignedTeam', isEqualTo: teamName)
+          .get();
+
+      for (final v in vehicles.docs) {
+        batch.update(v.reference, {'status': 'Available'});
+      }
+    }
+
+    await batch.commit();
+
+    if (!mounted) return;
+
+    setState(() {
+      _dispatchStatus = "Resolved";
+      _hasPendingBackupRequest = false;
+      _currentDispatchId = null;
+      _currentAlertId = null;
+      _currentWaveNumber = 1;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("🚒 Backup request sent.")),
+      const SnackBar(
+        content: Text("Incident resolved. All teams cleared."),
+      ),
     );
-
   } catch (e) {
-    debugPrint("Backup request error: $e");
+    debugPrint("Resolve error: $e");
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Failed to resolve incident: $e")),
+    );
   }
 }
-
-  // ---------------------------------------------------------------
-  // Alert Details Modal (for responder assigned alert)
-  // ---------------------------------------------------------------
 
   Widget _infoRow(String label, dynamic value) {
     return Padding(
@@ -1157,8 +1228,6 @@ Future<void> _callBackup() async {
               fontSize: 14,
             ),
           ),
-
-          // 🔥 Value expands properly even if long
           Expanded(
             child: Text(
               value?.toString() ?? "N/A",
@@ -1171,7 +1240,7 @@ Future<void> _callBackup() async {
   }
 
   Widget _alertDetailsModal() {
-    _stopAlarm(); // 🔕 safety stop if modal opened from anywhere
+    _stopAlarm();
     if (_alertData == null) return const SizedBox();
 
     final a = _alertData!;
@@ -1190,7 +1259,6 @@ Future<void> _callBackup() async {
         height: MediaQuery.of(context).size.height * 0.75,
         child: Column(
           children: [
-            // ===================== HEADER (STICKY TITLE) =====================
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
@@ -1202,15 +1270,12 @@ Future<void> _callBackup() async {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
             ),
-
-            // ===================== SCROLLABLE CONTENT =====================
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 🔥 FIRE IMAGE
                     if (snapshotUrl != null &&
                         snapshotUrl.toString().isNotEmpty)
                       ClipRRect(
@@ -1238,13 +1303,10 @@ Future<void> _callBackup() async {
                           },
                         ),
                       ),
-
                     if (snapshotUrl != null) const SizedBox(height: 20),
-
                     _infoRow("Type", a['type']),
                     _infoRow("Status", a['status']),
                     _infoRow("Location", a['location']),
-
                     const SizedBox(height: 16),
                     const Text(
                       "Reporter Information",
@@ -1254,14 +1316,11 @@ Future<void> _callBackup() async {
                       ),
                     ),
                     const Divider(),
-
                     _infoRow("Name", a['userName']),
                     _infoRow("Contact", a['userContact']),
                     _infoRow("Address", a['userAddress']),
-
                     if (userLat != null && userLng != null)
                       _infoRow("Coordinates", "$userLat, $userLng"),
-
                     const SizedBox(height: 16),
                     const Text(
                       "Timestamp",
@@ -1271,7 +1330,6 @@ Future<void> _callBackup() async {
                       ),
                     ),
                     const Divider(),
-
                     Text(
                       a['timestamp'] != null
                           ? DateTime.fromMillisecondsSinceEpoch(
@@ -1280,14 +1338,11 @@ Future<void> _callBackup() async {
                           : "N/A",
                       style: const TextStyle(fontSize: 14),
                     ),
-
                     const SizedBox(height: 20),
                   ],
                 ),
               ),
             ),
-
-            // ===================== FOOTER (STICKY BUTTONS) =====================
             Container(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               decoration: const BoxDecoration(
@@ -1315,10 +1370,8 @@ Future<void> _callBackup() async {
                         child: const Text("Navigate"),
                       ),
                     ),
-
                   if (userLat != null && userLng != null)
                     const SizedBox(width: 12),
-
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () => Navigator.pop(context),
@@ -1342,9 +1395,6 @@ Future<void> _callBackup() async {
     );
   }
 
-  // ---------------------------------------------------------------
-  // NAVIGATION → Uses EXACT email match
-  // ---------------------------------------------------------------
   Future<void> _openNavigationToAlert({
     required double alertLat,
     required double alertLng,
@@ -1377,7 +1427,6 @@ Future<void> _callBackup() async {
         return;
       }
 
-      // 🔥 Push in-app map screen
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -1395,7 +1444,6 @@ Future<void> _callBackup() async {
     }
   }
 
-  // Build Maps directions URI and launch external app / browser.
   Future<void> _launchMapsDirections({
     required double originLat,
     required double originLng,
@@ -1407,9 +1455,9 @@ Future<void> _callBackup() async {
     );
 
     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Could not open maps.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Could not open maps.")),
+      );
     }
   }
 }
