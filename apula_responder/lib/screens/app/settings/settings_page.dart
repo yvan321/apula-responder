@@ -5,6 +5,7 @@ import 'package:apula_responder/screens/app/settings/notifsetting_page.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'about_page.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -27,10 +28,12 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadResponderData();
   }
 
-  // 🔥 Load Firestore user data
   Future<void> _loadResponderData() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      setState(() => _loading = false);
+      return;
+    }
 
     final query = await FirebaseFirestore.instance
         .collection("users")
@@ -41,8 +44,8 @@ class _SettingsPageState extends State<SettingsPage> {
     if (query.docs.isNotEmpty) {
       final doc = query.docs.first;
       setState(() {
-        responderName = doc["name"] ?? "";
-        responderAddress = doc["address"] ?? "";
+        responderName = (doc.data()["name"] ?? "").toString();
+        responderAddress = (doc.data()["address"] ?? "").toString();
         _loading = false;
       });
     } else {
@@ -50,21 +53,31 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  // 🔥 Logout method
   Future<void> _logout() async {
     try {
       await FirebaseAuth.instance.signOut();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('isLoggedIn');
+      await prefs.remove('uid');
+      await prefs.remove('email');
+      await prefs.remove('role');
+      await prefs.remove('name');
+      await prefs.remove('approved');
+      await prefs.remove('verified');
+      await prefs.remove('status');
+
       if (!mounted) return;
 
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Logout failed: $e")),
       );
     }
   }
 
-  // 🔥 Styled Logout Dialog
   void _showLogoutDialog() {
     final theme = Theme.of(context);
 
@@ -80,7 +93,6 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               Icon(Icons.logout, size: 50, color: redColor),
               const SizedBox(height: 16),
-
               Text(
                 "Confirm Logout",
                 style: TextStyle(
@@ -89,7 +101,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   color: theme.colorScheme.onSurface,
                 ),
               ),
-
               const SizedBox(height: 10),
               Text(
                 "Are you sure you want to log out?",
@@ -99,12 +110,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   color: theme.colorScheme.onSurface.withOpacity(0.7),
                 ),
               ),
-
               const SizedBox(height: 25),
-
               Row(
                 children: [
-                  // Cancel Button
                   Expanded(
                     child: OutlinedButton(
                       style: OutlinedButton.styleFrom(
@@ -119,10 +127,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: const Text("Cancel"),
                     ),
                   ),
-
                   const SizedBox(width: 12),
-
-                  // Logout Button
                   Expanded(
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
@@ -149,7 +154,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // UI TILE BUILDER
   Widget _settingsTile(IconData icon, String title, {VoidCallback? onTap}) {
     final theme = Theme.of(context);
 
@@ -178,8 +182,11 @@ class _SettingsPageState extends State<SettingsPage> {
             fontWeight: FontWeight.w500,
           ),
         ),
-        trailing: Icon(Icons.arrow_forward_ios,
-            size: 16, color: theme.colorScheme.onSurface.withOpacity(0.5)),
+        trailing: Icon(
+          Icons.arrow_forward_ios,
+          size: 16,
+          color: theme.colorScheme.onSurface.withOpacity(0.5),
+        ),
         onTap: onTap,
       ),
     );
@@ -195,7 +202,6 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // HEADER TITLE
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
               child: Text(
@@ -207,8 +213,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
             ),
-
-            // WHITE / DARK SURFACE CONTAINER
             Expanded(
               child: Container(
                 width: double.infinity,
@@ -226,20 +230,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 child: SingleChildScrollView(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 30,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // ⬇️⬇️⬇️ ADDED LOGO HERE ⬇️⬇️⬇️
-
                       Image.asset(
                         "assets/logo.png",
                         height: 180,
                         width: 180,
                       ),
                       const SizedBox(height: 12),
-
                       Text(
                         _loading ? "Loading..." : responderName,
                         style: TextStyle(
@@ -248,22 +251,16 @@ class _SettingsPageState extends State<SettingsPage> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-
                       const SizedBox(height: 4),
-
                       Text(
                         _loading ? "Loading..." : responderAddress,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: theme.colorScheme.onSurface.withOpacity(0.7),
                           fontSize: 14,
                         ),
                       ),
-
-                      // ⬆️⬆️⬆️ END OF LOGO SECTION ⬆️⬆️⬆️
-
                       const SizedBox(height: 35),
-
-                      // SETTINGS TILES
                       _settingsTile(
                         Icons.notifications_none_outlined,
                         "Notification Preferences",

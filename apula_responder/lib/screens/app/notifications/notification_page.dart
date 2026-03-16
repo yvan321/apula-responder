@@ -158,22 +158,13 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   // ---------------------------
-  // EMPTY PAGE LOTTIE
+  // EMPTY PAGE TEXT ONLY
+  // ---------------------------
+  // ---------------------------
+  // EMPTY PAGE TEXT
   // ---------------------------
   Widget _emptyState() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Lottie.asset("assets/empty.json", height: 180),
-          const SizedBox(height: 10),
-          const Text(
-            "No notifications yet.",
-            style: TextStyle(fontSize: 16, color: Colors.grey),
-          ),
-        ],
-      ),
-    );
+    return const Center(child: Text("No notifications found."));
   }
 
   // ---------------------------

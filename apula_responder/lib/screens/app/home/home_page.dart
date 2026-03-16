@@ -30,36 +30,28 @@ class _HomePageState extends State<HomePage> {
   bool _isDay = true;
   String? _lastDispatchId;
 
-  // 🔥 Dispatch Tracking
   String _dispatchStatus = "Loading...";
   StreamSubscription? _dispatchSub;
   String _callerAddress = "";
 
-  // 🔥 Recent Alerts
   List<Map<String, dynamic>> _recentAlerts = [];
 
-  // 🔍 Alert Modal
   bool _showAlertModal = false;
   Map<String, dynamic>? _alertData;
 
-  // 🔥 Responder Availability
   String _responderStatus = "Available";
 
-  // ------------------------
-  // Audio & Notification
-  // ------------------------
   final AudioPlayer _player = AudioPlayer();
   bool _hasPlayedSound = false;
   int _unreadNotifCount = 0;
 
-  // ------------------------
-  // Backup Request State
-  // ------------------------
   bool _isRequestingBackup = false;
   bool _hasPendingBackupRequest = false;
   int _currentWaveNumber = 1;
   String? _currentDispatchId;
   String? _currentAlertId;
+
+  bool _isTeamLeader = false;
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
@@ -125,6 +117,114 @@ class _HomePageState extends State<HomePage> {
       debugPrint("Image download failed: $e");
     }
     return null;
+  }
+
+  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _getCurrentUserDoc() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return null;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (snap.docs.isEmpty) return null;
+    return snap.docs.first;
+  }
+
+  Future<bool> _resolveLeaderForDispatch(
+    String dispatchId,
+    Map<String, dynamic> dispatchData,
+  ) async {
+    try {
+      final currentUserDoc = await _getCurrentUserDoc();
+      if (currentUserDoc == null) return false;
+
+      final currentUserId = currentUserDoc.id;
+      final currentUserEmail =
+          (currentUserDoc.data()['email'] ?? '').toString().toLowerCase();
+
+      // 1) Direct leaderId on dispatch
+      final dispatchLeaderId = dispatchData['leaderId'];
+      if (dispatchLeaderId != null &&
+          dispatchLeaderId.toString().trim().isNotEmpty) {
+        return dispatchLeaderId.toString() == currentUserId;
+      }
+
+      // 2) Try to discover teamId/teamName from dispatch members/responders
+      String? teamId;
+      String? teamName;
+
+      final members = dispatchData['members'];
+      if (members is List) {
+        for (final m in members) {
+          if (m is Map) {
+            final memberId = (m['id'] ?? '').toString();
+            final memberEmail = (m['email'] ?? '').toString().toLowerCase();
+            if (memberId == currentUserId || memberEmail == currentUserEmail) {
+              teamId = (m['teamId'] ?? '').toString();
+              teamName = (m['teamName'] ?? '').toString();
+              break;
+            }
+          }
+        }
+      }
+
+      final responders = dispatchData['responders'];
+      if ((teamId == null || teamId!.isEmpty) &&
+          (teamName == null || teamName!.isEmpty) &&
+          responders is List) {
+        for (final r in responders) {
+          if (r is Map) {
+            final responderId = (r['id'] ?? '').toString();
+            final responderEmail = (r['email'] ?? '').toString().toLowerCase();
+            if (responderId == currentUserId || responderEmail == currentUserEmail) {
+              teamId = (r['teamId'] ?? '').toString();
+              teamName = (r['team'] ?? r['teamName'] ?? '').toString();
+              break;
+            }
+          }
+        }
+      }
+
+      teamId ??= (dispatchData['teamId'] ?? '').toString();
+      teamName ??= (dispatchData['teamName'] ?? '').toString();
+
+      // 3) Look up the team doc by id first
+      if (teamId.isNotEmpty) {
+        final teamDoc = await FirebaseFirestore.instance
+            .collection('teams')
+            .doc(teamId)
+            .get();
+
+        if (teamDoc.exists) {
+          final teamData = teamDoc.data() as Map<String, dynamic>;
+          final leaderId = (teamData['leaderId'] ?? '').toString();
+          return leaderId == currentUserId;
+        }
+      }
+
+      // 4) Look up the team doc by teamName
+      if (teamName.isNotEmpty) {
+        final teamSnap = await FirebaseFirestore.instance
+            .collection('teams')
+            .where('teamName', isEqualTo: teamName)
+            .limit(1)
+            .get();
+
+        if (teamSnap.docs.isNotEmpty) {
+          final teamData = teamSnap.docs.first.data();
+          final leaderId = (teamData['leaderId'] ?? '').toString();
+          return leaderId == currentUserId;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      debugPrint("Leader resolve error: $e");
+      return false;
+    }
   }
 
   Future<void> _getResponderStatus() async {
@@ -214,10 +314,18 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // ✅ NO dispatches composite query here anymore
   Future<void> _requestBackup() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
+    if (!_isTeamLeader) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Only the team leader can request backup."),
+        ),
+      );
+      return;
+    }
 
     if (_isRequestingBackup) return;
 
@@ -357,6 +465,7 @@ class _HomePageState extends State<HomePage> {
             _currentAlertId = null;
             _currentWaveNumber = 1;
             _hasPendingBackupRequest = false;
+            _isTeamLeader = false;
           });
 
           _hasPlayedSound = false;
@@ -372,6 +481,8 @@ class _HomePageState extends State<HomePage> {
         final int parsedWave =
             rawWave is int ? rawWave : int.tryParse(rawWave.toString()) ?? 1;
 
+        final bool leader = await _resolveLeaderForDispatch(docSnap.id, data);
+
         if (!mounted) return;
         setState(() {
           _dispatchStatus = status;
@@ -379,6 +490,7 @@ class _HomePageState extends State<HomePage> {
           _currentDispatchId = docSnap.id;
           _currentAlertId = data["alertId"];
           _currentWaveNumber = parsedWave;
+          _isTeamLeader = leader;
         });
 
         if (status == "Dispatched") {
@@ -389,6 +501,7 @@ class _HomePageState extends State<HomePage> {
 
             debugPrint("🔥 NEW DISPATCH DETECTED");
             debugPrint("📍 Address: $address");
+            debugPrint("👑 Is Leader: $leader");
 
             _playDispatchSound();
             _showDispatchNotification();
@@ -412,6 +525,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _dispatchStatus = "Resolved";
             _hasPendingBackupRequest = false;
+            _isTeamLeader = false;
           });
         }
       },
@@ -1019,6 +1133,11 @@ class _HomePageState extends State<HomePage> {
                         "Wave: $_currentWaveNumber",
                         style: const TextStyle(color: Colors.white70),
                       ),
+                    if (_dispatchStatus == "Dispatched")
+                      Text(
+                        _isTeamLeader ? "Role: Leader" : "Role: Member",
+                        style: const TextStyle(color: Colors.white70),
+                      ),
                   ],
                 ),
               ),
@@ -1040,7 +1159,7 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _markAsResolved,
+                    onPressed: _isTeamLeader ? _markAsResolved : null,
                     child: const Text("Resolve"),
                   ),
                 ),
@@ -1050,7 +1169,9 @@ class _HomePageState extends State<HomePage> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: (_hasPendingBackupRequest || _isRequestingBackup)
+                onPressed: (!_isTeamLeader ||
+                        _hasPendingBackupRequest ||
+                        _isRequestingBackup)
                     ? null
                     : _requestBackup,
                 style: ElevatedButton.styleFrom(
@@ -1081,7 +1202,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ✅ NO dispatches query here anymore
   void _openAlertDetails() async {
     if (_currentAlertId == null) return;
 
@@ -1099,120 +1219,139 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // ✅ NO dispatches query here anymore
   void _markAsResolved() async {
-  if (_currentDispatchId == null) return;
-
-  try {
-    final currentDispatch = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .doc(_currentDispatchId)
-        .get();
-
-    if (!currentDispatch.exists) return;
-
-    final currentData = currentDispatch.data() as Map<String, dynamic>;
-    final alertId = currentData["alertId"];
-
-    if (alertId == null) return;
-
-    // Get ALL dispatches under the same alert
-    final dispatches = await FirebaseFirestore.instance
-        .collection('dispatches')
-        .where('alertId', isEqualTo: alertId)
-        .get();
-
-    final batch = FirebaseFirestore.instance.batch();
-
-    final Set<String> responderIds = {};
-    final Set<String> teamIds = {};
-    final Set<String> teamNames = {};
-
-    for (final doc in dispatches.docs) {
-      final data = doc.data();
-
-      // Resolve dispatch
-      batch.update(doc.reference, {
-        'status': 'Resolved',
-      });
-
-      final responders = (data["responders"] as List<dynamic>? ?? []);
-
-      for (final r in responders) {
-        if (r["id"] != null) {
-          responderIds.add(r["id"]);
-        }
-
-        if (r["teamId"] != null) {
-          teamIds.add(r["teamId"]);
-        }
-
-        if (r["team"] != null) {
-          teamNames.add(r["team"]);
-        }
-      }
-    }
-
-    // Resolve alert
-    batch.update(
-      FirebaseFirestore.instance.collection('alerts').doc(alertId),
-      {'status': 'Resolved'},
-    );
-
-    // Reset responders
-    for (final id in responderIds) {
-      batch.update(
-        FirebaseFirestore.instance.collection('users').doc(id),
-        {'status': 'Available'},
+    if (!_isTeamLeader) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Only the team leader can resolve the incident."),
+        ),
       );
+      return;
     }
 
-    // Reset teams
-    for (final id in teamIds) {
-      batch.update(
-        FirebaseFirestore.instance.collection('teams').doc(id),
-        {'status': 'Available'},
-      );
-    }
+    if (_currentDispatchId == null) return;
 
-    // Reset vehicles
-    for (final teamName in teamNames) {
-      final vehicles = await FirebaseFirestore.instance
-          .collection('vehicles')
-          .where('assignedTeam', isEqualTo: teamName)
+    try {
+      final currentDispatch = await FirebaseFirestore.instance
+          .collection('dispatches')
+          .doc(_currentDispatchId)
           .get();
 
-      for (final v in vehicles.docs) {
-        batch.update(v.reference, {'status': 'Available'});
+      if (!currentDispatch.exists) return;
+
+      final currentData = currentDispatch.data() as Map<String, dynamic>;
+      final alertId = currentData["alertId"];
+
+      if (alertId == null) return;
+
+      final dispatches = await FirebaseFirestore.instance
+          .collection('dispatches')
+          .where('alertId', isEqualTo: alertId)
+          .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      final Set<String> responderIds = {};
+      final Set<String> teamIds = {};
+      final Set<String> teamNames = {};
+
+      for (final doc in dispatches.docs) {
+        final data = doc.data();
+
+        batch.update(doc.reference, {
+          'status': 'Resolved',
+        });
+
+        final responders = (data["responders"] as List<dynamic>? ?? []);
+        for (final r in responders) {
+          if (r is Map) {
+            if (r["id"] != null) {
+              responderIds.add(r["id"].toString());
+            }
+            if (r["teamId"] != null) {
+              teamIds.add(r["teamId"].toString());
+            }
+            if (r["team"] != null) {
+              teamNames.add(r["team"].toString());
+            } else if (r["teamName"] != null) {
+              teamNames.add(r["teamName"].toString());
+            }
+          }
+        }
+
+        final members = (data["members"] as List<dynamic>? ?? []);
+        for (final m in members) {
+          if (m is Map) {
+            if (m["id"] != null) {
+              responderIds.add(m["id"].toString());
+            }
+            if (m["teamId"] != null) {
+              teamIds.add(m["teamId"].toString());
+            }
+            if (m["teamName"] != null) {
+              teamNames.add(m["teamName"].toString());
+            }
+          }
+        }
       }
+
+      batch.update(
+        FirebaseFirestore.instance.collection('alerts').doc(alertId),
+        {'status': 'Resolved'},
+      );
+
+      for (final id in responderIds) {
+        batch.update(
+          FirebaseFirestore.instance.collection('users').doc(id),
+          {'status': 'Available'},
+        );
+      }
+
+      for (final id in teamIds) {
+        batch.update(
+          FirebaseFirestore.instance.collection('teams').doc(id),
+          {'status': 'Available'},
+        );
+      }
+
+      for (final teamName in teamNames) {
+        final vehicles = await FirebaseFirestore.instance
+            .collection('vehicles')
+            .where('assignedTeam', isEqualTo: teamName)
+            .get();
+
+        for (final v in vehicles.docs) {
+          batch.update(v.reference, {'status': 'Available'});
+        }
+      }
+
+      await batch.commit();
+
+      if (!mounted) return;
+
+      setState(() {
+        _dispatchStatus = "Resolved";
+        _hasPendingBackupRequest = false;
+        _currentDispatchId = null;
+        _currentAlertId = null;
+        _currentWaveNumber = 1;
+        _isTeamLeader = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Incident resolved. All teams cleared."),
+        ),
+      );
+    } catch (e) {
+      debugPrint("Resolve error: $e");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to resolve incident: $e")),
+      );
     }
-
-    await batch.commit();
-
-    if (!mounted) return;
-
-    setState(() {
-      _dispatchStatus = "Resolved";
-      _hasPendingBackupRequest = false;
-      _currentDispatchId = null;
-      _currentAlertId = null;
-      _currentWaveNumber = 1;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Incident resolved. All teams cleared."),
-      ),
-    );
-  } catch (e) {
-    debugPrint("Resolve error: $e");
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Failed to resolve incident: $e")),
-    );
   }
-}
 
   Widget _infoRow(String label, dynamic value) {
     return Padding(
