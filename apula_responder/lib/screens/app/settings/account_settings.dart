@@ -12,16 +12,18 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
-  // ✅ Put your key here for now (or move to env later)
   static const String _googleApiKey = "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680";
 
   final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _teamController = TextEditingController();
   final _contactController = TextEditingController();
   final _stationController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
   bool _isLoading = true;
+  bool _isSaving = false;
   String? _docId;
 
   double? selectedLat;
@@ -36,6 +38,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   @override
   void dispose() {
     _nameController.dispose();
+    _emailController.dispose();
+    _teamController.dispose();
     _contactController.dispose();
     _stationController.dispose();
     _passwordController.dispose();
@@ -46,41 +50,62 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   Future<void> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       return;
     }
 
-    final query = await FirebaseFirestore.instance
-        .collection("users")
-        .where("email", isEqualTo: user.email)
-        .limit(1)
-        .get();
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection("users")
+          .where("email", isEqualTo: user.email)
+          .limit(1)
+          .get();
 
-    if (query.docs.isNotEmpty) {
-      final doc = query.docs.first;
-      final data = doc.data();
-      _docId = doc.id;
+      if (query.docs.isNotEmpty) {
+        final doc = query.docs.first;
+        final data = doc.data();
+        _docId = doc.id;
 
-      final latVal = data["latitude"];
-      final lngVal = data["longitude"];
+        final latVal = data["latitude"];
+        final lngVal = data["longitude"];
 
+        if (!mounted) return;
+        setState(() {
+          _nameController.text = (data["name"] ?? "").toString();
+          _emailController.text = (data["email"] ?? user.email ?? "").toString();
+          _teamController.text = (data["teamName"] ?? "No Team Assigned").toString();
+          _contactController.text = (data["contact"] ?? "").toString();
+          _stationController.text = (data["address"] ?? "").toString();
+
+          selectedLat = (latVal is num) ? latVal.toDouble() : null;
+          selectedLng = (lngVal is num) ? lngVal.toDouble() : null;
+
+          _isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _emailController.text = user.email ?? "";
+          _teamController.text = "No Team Assigned";
+          _isLoading = false;
+        });
+        _showSnackBar("User document not found in Firestore.", Colors.red);
+      }
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _nameController.text = (data["name"] ?? "").toString();
-        _contactController.text = (data["contact"] ?? "").toString();
-        _stationController.text = (data["address"] ?? "").toString();
-
-        // ✅ safe numeric cast
-        selectedLat = (latVal is num) ? latVal.toDouble() : null;
-        selectedLng = (lngVal is num) ? lngVal.toDouble() : null;
-
+        _emailController.text = user.email ?? "";
+        _teamController.text = "No Team Assigned";
         _isLoading = false;
       });
-    } else {
-      setState(() => _isLoading = false);
+      _showSnackBar("Failed to load account data: $e", Colors.red);
     }
   }
 
   Future<void> _saveChanges() async {
+    if (_isSaving) return;
+
     final name = _nameController.text.trim();
     final contact = _contactController.text.trim();
     final station = _stationController.text.trim();
@@ -92,7 +117,11 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       return;
     }
 
-    // ✅ Require map selection if your app needs coordinates
+    if (_docId == null) {
+      _showSnackBar("User document not found. Cannot save changes.", Colors.red);
+      return;
+    }
+
     if (selectedLat == null || selectedLng == null) {
       _showSnackBar("Please select an address on the map.", Colors.red);
       return;
@@ -103,6 +132,8 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       return;
     }
 
+    setState(() => _isSaving = true);
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -110,33 +141,46 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
 
     try {
-      if (_docId != null) {
-        await FirebaseFirestore.instance.collection("users").doc(_docId).update({
-          "name": name,
-          "contact": contact,
-          "address": station,
-          "latitude": selectedLat,
-          "longitude": selectedLng,
-          "updatedAt": FieldValue.serverTimestamp(),
-        });
-      }
+      await FirebaseFirestore.instance.collection("users").doc(_docId).update({
+        "name": name,
+        "contact": contact,
+        "address": station,
+        "latitude": selectedLat,
+        "longitude": selectedLng,
+        "updatedAt": FieldValue.serverTimestamp(),
+      });
 
       if (pass.isNotEmpty) {
         await FirebaseAuth.instance.currentUser!.updatePassword(pass);
       }
 
-      Navigator.pop(context); // close loading dialog
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (!mounted) return;
+      setState(() => _isSaving = false);
       _showSuccessDialog("Changes saved successfully!");
     } catch (e) {
-      Navigator.pop(context); // close loading dialog
-      _showSnackBar("Error: $e", Colors.red);
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      _showSnackBar("Error saving changes: $e", Colors.red);
     }
   }
 
   void _showSnackBar(String message, Color bgColor) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: const TextStyle(color: Colors.white)),
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white),
+        ),
         backgroundColor: bgColor,
         behavior: SnackBarBehavior.floating,
       ),
@@ -149,7 +193,11 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Lottie.asset('assets/fireloading.json', width: 130, height: 130),
+          Lottie.asset(
+            'assets/fireloading.json',
+            width: 130,
+            height: 130,
+          ),
           const SizedBox(height: 20),
           Text(
             msg,
@@ -171,8 +219,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
       barrierDismissible: false,
       builder: (context) {
         Future.delayed(const Duration(seconds: 2), () {
-          Navigator.pop(context); // close success dialog
-          Navigator.pop(context); // back
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).pop();
+            Navigator.pop(context);
+          }
         });
 
         return AlertDialog(
@@ -203,6 +253,15 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
   }
 
+  InputDecoration _input(String label) {
+    return InputDecoration(
+      labelText: label,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const redColor = Color(0xFFA30000);
@@ -210,7 +269,9 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     return Scaffold(
       body: SafeArea(
         child: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: redColor))
+            ? const Center(
+                child: CircularProgressIndicator(color: redColor),
+              )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -218,7 +279,11 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                     padding: const EdgeInsets.only(left: 10, top: 10),
                     child: InkWell(
                       onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.chevron_left, size: 30, color: redColor),
+                      child: const Icon(
+                        Icons.chevron_left,
+                        size: 30,
+                        color: redColor,
+                      ),
                     ),
                   ),
                   const Padding(
@@ -244,12 +309,39 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                             ),
                             const SizedBox(height: 20),
                             TextField(
+                              controller: _emailController,
+                              readOnly: true,
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              decoration: _input("Email").copyWith(
+                                suffixIcon: const Icon(Icons.lock_outline),
+                                filled: true,
+                                fillColor: const Color(0xFFF3F3F3),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            TextField(
+                              controller: _teamController,
+                              readOnly: true,
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              decoration: _input("Team").copyWith(
+                                suffixIcon: const Icon(Icons.groups_rounded),
+                                filled: true,
+                                fillColor: const Color(0xFFF3F3F3),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            TextField(
                               controller: _contactController,
+                              keyboardType: TextInputType.phone,
                               decoration: _input("Contact Number"),
                             ),
                             const SizedBox(height: 20),
-
-                            // ⭐ MAP PICKER HERE (FIXED)
                             TextField(
                               controller: _stationController,
                               readOnly: true,
@@ -273,13 +365,14 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                                   setState(() {
                                     _stationController.text =
                                         (result["address"] ?? "").toString();
-                                    selectedLat = (result["lat"] as num?)?.toDouble();
-                                    selectedLng = (result["lng"] as num?)?.toDouble();
+                                    selectedLat =
+                                        (result["lat"] as num?)?.toDouble();
+                                    selectedLng =
+                                        (result["lng"] as num?)?.toDouble();
                                   });
                                 }
                               },
                             ),
-
                             const SizedBox(height: 20),
                             TextField(
                               controller: _passwordController,
@@ -297,16 +390,18 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                               width: double.infinity,
                               height: 50,
                               child: ElevatedButton(
-                                onPressed: _saveChanges,
+                                onPressed: _isSaving ? null : _saveChanges,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: redColor,
+                                  disabledBackgroundColor:
+                                      redColor.withOpacity(0.6),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                 ),
-                                child: const Text(
-                                  "Save Changes",
-                                  style: TextStyle(
+                                child: Text(
+                                  _isSaving ? "Saving..." : "Save Changes",
+                                  style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
                                     fontSize: 16,
@@ -321,15 +416,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                   ),
                 ],
               ),
-      ),
-    );
-  }
-
-  InputDecoration _input(String label) {
-    return InputDecoration(
-      labelText: label,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
       ),
     );
   }

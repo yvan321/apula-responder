@@ -17,7 +17,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   String responderName = "";
-  String responderAddress = "";
+  String stationName = "";
+  String stationAddress = "";
   bool _loading = true;
 
   final Color redColor = const Color(0xFFA30000);
@@ -35,21 +36,78 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
-    final query = await FirebaseFirestore.instance
-        .collection("users")
-        .where("email", isEqualTo: user.email)
-        .limit(1)
-        .get();
+    try {
+      final userQuery = await FirebaseFirestore.instance
+          .collection("users")
+          .where("email", isEqualTo: user.email)
+          .limit(1)
+          .get();
 
-    if (query.docs.isNotEmpty) {
-      final doc = query.docs.first;
+      if (userQuery.docs.isEmpty) {
+        setState(() => _loading = false);
+        return;
+      }
+
+      final userDoc = userQuery.docs.first;
+      final userData = userDoc.data();
+
+      final String name = (userData["name"] ?? "").toString();
+      final String stationId = (userData["stationId"] ?? "").toString();
+      final String teamId = (userData["teamId"] ?? "").toString();
+
+      String fetchedStationName = "";
+      String fetchedStationAddress = "";
+
+      // Priority 1: find station by stationId
+      if (stationId.isNotEmpty) {
+        final stationSnap = await FirebaseFirestore.instance
+            .collection("stations")
+            .doc(stationId)
+            .get();
+
+        if (stationSnap.exists) {
+          final stationData = stationSnap.data();
+          fetchedStationName = (stationData?["name"] ?? "").toString();
+          fetchedStationAddress = (stationData?["address"] ?? "").toString();
+        }
+      }
+
+      // Priority 2: fallback using teamId inside teamIds
+      if ((fetchedStationName.isEmpty || fetchedStationAddress.isEmpty) &&
+          teamId.isNotEmpty) {
+        final stationQuery = await FirebaseFirestore.instance
+            .collection("stations")
+            .where("teamIds", arrayContains: teamId)
+            .limit(1)
+            .get();
+
+        if (stationQuery.docs.isNotEmpty) {
+          final stationData = stationQuery.docs.first.data();
+          fetchedStationName = (stationData["name"] ?? "").toString();
+          fetchedStationAddress = (stationData["address"] ?? "").toString();
+        }
+      }
+
+      if (!mounted) return;
+
       setState(() {
-        responderName = (doc.data()["name"] ?? "").toString();
-        responderAddress = (doc.data()["address"] ?? "").toString();
+        responderName = name;
+        stationName =
+            fetchedStationName.isNotEmpty ? fetchedStationName : "No station assigned";
+        stationAddress = fetchedStationAddress.isNotEmpty
+            ? fetchedStationAddress
+            : "No station address found";
         _loading = false;
       });
-    } else {
-      setState(() => _loading = false);
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        responderName = "";
+        stationName = "Failed to load station";
+        stationAddress = "Failed to load station address";
+        _loading = false;
+      });
     }
   }
 
@@ -243,24 +301,48 @@ class _SettingsPageState extends State<SettingsPage> {
                         width: 180,
                       ),
                       const SizedBox(height: 12),
+
+                      // Responder Name
                       Text(
                         _loading ? "Loading..." : responderName,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           color: redColor,
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _loading ? "Loading..." : responderAddress,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurface.withOpacity(0.7),
-                          fontSize: 14,
-                        ),
+
+                      const SizedBox(height: 10),
+
+                      // Station name + station address
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            _loading ? "Loading..." : stationName,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _loading ? "Loading..." : stationAddress,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface.withOpacity(0.7),
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
                       ),
+
                       const SizedBox(height: 35),
+
                       _settingsTile(
                         Icons.notifications_none_outlined,
                         "Notification Preferences",

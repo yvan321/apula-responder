@@ -38,6 +38,7 @@ dependencies:
   geolocator: ^12.0.0
   flutter_tts: ^4.0.0
   http: ^1.6.0
+  geocoding: ^4.0.0
 
   # Optional map alternative
   flutter_map: ^6.1.0
@@ -74,3 +75,9 @@ flutter:
     - assets/examples/thermal_example.png
     - assets/fire_pin.png
     - assets/responder_pin.png
+    - assets/sun.json
+    - assets/suncloudly.json
+    - assets/cloudly.json
+    - assets/rainy.json
+    - assets/moon.json
+    - assets/mooncloudly.json
