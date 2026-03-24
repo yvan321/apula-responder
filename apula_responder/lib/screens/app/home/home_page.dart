@@ -55,6 +55,16 @@ class _HomePageState extends State<HomePage> {
 
   String _userName = "Responder";
   String _teamName = "No Team";
+  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
+      GlobalKey<RefreshIndicatorState>();
+  final ScrollController _dashboardScrollController = ScrollController();
+
+  String? _teamId;
+  String? _stationName;
+  String? _vehicleCode;
+  String? _vehiclePlateNumber;
+  String? _leaderName;
+  List<String> _teamMembers = [];
 
   double? _currentTemp;
   String _weatherTitle = "Loading...";
@@ -400,12 +410,38 @@ class _HomePageState extends State<HomePage> {
 
       if (snap.docs.isNotEmpty) {
         final data = snap.docs.first.data() as Map<String, dynamic>;
+        final rawTeamName = (data['teamName'] ?? '').toString().trim();
+        final normalizedTeamName =
+            rawTeamName.isEmpty || rawTeamName.toLowerCase() == "no team"
+            ? "Unassigned"
+            : rawTeamName;
+
         if (!mounted) return;
         setState(() {
           _responderStatus = data['status'] ?? "Available";
           _userName = data['name'] ?? "Responder";
-          _teamName = data['teamName'] ?? "No Team";
+          _teamName = normalizedTeamName;
+          _teamId = (data['teamId'] ?? '').toString().trim().isEmpty
+              ? null
+              : data['teamId'].toString();
+          _stationName = (data['stationName'] ?? '').toString().trim().isEmpty
+              ? null
+              : data['stationName'].toString();
+          _vehicleCode = (data['vehicleCode'] ?? '').toString().trim().isEmpty
+              ? null
+              : data['vehicleCode'].toString();
         });
+
+        if (_teamName != "Unassigned") {
+          await _loadTeamTruckInfo();
+        } else {
+          if (!mounted) return;
+          setState(() {
+            _vehiclePlateNumber = null;
+            _leaderName = null;
+            _teamMembers = [];
+          });
+        }
       }
     } catch (e) {
       debugPrint("Status load error: $e");
@@ -624,7 +660,7 @@ class _HomePageState extends State<HomePage> {
 
           if (!mounted) return;
           setState(() {
-            _dispatchStatus = "No Active Dispatch 🔒";
+            _dispatchStatus = "No Active Dispatch";
             _callerAddress = "";
             _currentDispatchId = null;
             _currentAlertId = null;
@@ -828,6 +864,327 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       debugPrint("Recent responder dispatch load error: $e");
     }
+  }
+
+  Future<void> _refreshDashboard() async {
+    await Future.wait([
+      _getResponderStatus(),
+      _loadRecentAlerts(),
+      _loadWeatherCardData(),
+    ]);
+    _listenToDispatchStatus();
+  }
+
+  Future<void> _loadTeamTruckInfo() async {
+    try {
+      String? resolvedTeamId = _teamId;
+      String? resolvedTeamName = _teamName == "Unassigned" ? null : _teamName;
+
+      DocumentSnapshot<Map<String, dynamic>>? teamDoc;
+
+      if (resolvedTeamId != null && resolvedTeamId.isNotEmpty) {
+        final doc = await FirebaseFirestore.instance
+            .collection('teams')
+            .doc(resolvedTeamId)
+            .get();
+        if (doc.exists) {
+          teamDoc = doc;
+        }
+      }
+
+      if (teamDoc == null &&
+          resolvedTeamName != null &&
+          resolvedTeamName.trim().isNotEmpty) {
+        final snap = await FirebaseFirestore.instance
+            .collection('teams')
+            .where('teamName', isEqualTo: resolvedTeamName)
+            .limit(1)
+            .get();
+        if (snap.docs.isNotEmpty) {
+          teamDoc = snap.docs.first;
+        }
+      }
+
+      if (teamDoc == null || !teamDoc.exists) {
+        if (!mounted) return;
+        setState(() {
+          _leaderName = null;
+          _teamMembers = [];
+          _vehiclePlateNumber = null;
+        });
+        return;
+      }
+
+      final teamData = teamDoc.data() as Map<String, dynamic>;
+      final teamMembersRaw = teamData['members'];
+      final leaderId = (teamData['leaderId'] ?? '').toString();
+
+      String? foundLeaderName;
+      List<String> members = [];
+
+      if (teamMembersRaw is List) {
+        for (final item in teamMembersRaw) {
+          if (item is Map) {
+            final name = (item['name'] ?? 'Unknown').toString();
+            final memberId = (item['id'] ?? '').toString();
+            members.add(name);
+            if (memberId == leaderId) {
+              foundLeaderName = name;
+            }
+          }
+        }
+      }
+
+      foundLeaderName ??=
+          (teamData['leaderName'] ?? '').toString().trim().isEmpty
+          ? null
+          : teamData['leaderName'].toString();
+
+      String? plateNumber;
+      String? vehicleCode = _vehicleCode;
+
+      if ((vehicleCode == null || vehicleCode.trim().isEmpty) &&
+          teamData['vehicleCode'] != null) {
+        final teamVehicleCode = teamData['vehicleCode'].toString().trim();
+        vehicleCode = teamVehicleCode.isEmpty ? null : teamVehicleCode;
+      }
+
+      final assignedVehicleId = (teamData['vehicleId'] ?? '').toString().trim();
+
+      if (assignedVehicleId.isNotEmpty) {
+        final vehicleDoc = await FirebaseFirestore.instance
+            .collection('vehicles')
+            .doc(assignedVehicleId)
+            .get();
+
+        if (vehicleDoc.exists) {
+          final vehicleData = vehicleDoc.data() as Map<String, dynamic>;
+          final plate =
+              (vehicleData['plateNumber'] ??
+                      vehicleData['plateNo'] ??
+                      vehicleData['plate'] ??
+                      '')
+                  .toString()
+                  .trim();
+          plateNumber = plate.isEmpty ? null : plate;
+
+          if (vehicleCode == null || vehicleCode.trim().isEmpty) {
+            final vCode =
+                (vehicleData['code'] ?? vehicleData['vehicleCode'] ?? '')
+                    .toString()
+                    .trim();
+            vehicleCode = vCode.isEmpty ? null : vCode;
+          }
+        }
+      }
+
+      if ((plateNumber == null || plateNumber.isEmpty) &&
+          vehicleCode != null &&
+          vehicleCode.trim().isNotEmpty) {
+        final vehicleSnap = await FirebaseFirestore.instance
+            .collection('vehicles')
+            .where('code', isEqualTo: vehicleCode)
+            .limit(1)
+            .get();
+
+        if (vehicleSnap.docs.isNotEmpty) {
+          final vehicleData = vehicleSnap.docs.first.data();
+          final plate =
+              (vehicleData['plateNumber'] ??
+                      vehicleData['plateNo'] ??
+                      vehicleData['plate'] ??
+                      '')
+                  .toString()
+                  .trim();
+          plateNumber = plate.isEmpty ? null : plate;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _leaderName = foundLeaderName;
+        _teamMembers = members;
+        _vehicleCode = vehicleCode;
+        _vehiclePlateNumber = plateNumber;
+      });
+    } catch (e) {
+      debugPrint("Load team truck info error: $e");
+    }
+  }
+
+  void _showTeamTruckInfoModal() {
+    final displayTeam =
+        _teamName.trim().isEmpty || _teamName.trim().toLowerCase() == "no team"
+        ? "Unassigned"
+        : _teamName;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF7F7FA),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 46,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Center(
+                  child: Text(
+                    "Team & Truck Information",
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFB71C1C),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                _modernInfoCard(
+                  icon: Icons.groups_rounded,
+                  label: "Team",
+                  value: displayTeam == "Unassigned"
+                      ? "Team Unassigned"
+                      : "Team $displayTeam",
+                ),
+                const SizedBox(height: 12),
+                _modernInfoCard(
+                  icon: Icons.local_shipping_rounded,
+                  label: "Truck Code",
+                  value: (_vehicleCode == null || _vehicleCode!.trim().isEmpty)
+                      ? "No truck assigned"
+                      : _vehicleCode!,
+                ),
+                const SizedBox(height: 12),
+                _modernInfoCard(
+                  icon: Icons.pin_outlined,
+                  label: "Truck Plate Number",
+                  value:
+                      (_vehiclePlateNumber == null ||
+                          _vehiclePlateNumber!.trim().isEmpty)
+                      ? "No plate number available"
+                      : _vehiclePlateNumber!,
+                ),
+                const SizedBox(height: 12),
+                _modernInfoCard(
+                  icon: Icons.person_rounded,
+                  label: "Leader",
+                  value: (_leaderName == null || _leaderName!.trim().isEmpty)
+                      ? "No leader assigned"
+                      : _leaderName!,
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.badge_rounded, color: Color(0xFFB71C1C)),
+                          SizedBox(width: 8),
+                          Text(
+                            "Members",
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1C1C1E),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (_teamMembers.isEmpty)
+                        const Text(
+                          "No members available.",
+                          style: TextStyle(
+                            color: Color(0xFF636366),
+                            fontSize: 14,
+                          ),
+                        )
+                      else
+                        ..._teamMembers.map(
+                          (member) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.circle,
+                                  size: 8,
+                                  color: Color(0xFFB71C1C),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    member,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF1C1C1E),
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      elevation: 0,
+                      backgroundColor: const Color(0xFFB71C1C),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      "Close",
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _updateTime() {
@@ -1098,6 +1455,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _timer?.cancel();
     _dispatchSub?.cancel();
+    _dashboardScrollController.dispose();
     _player.dispose();
     super.dispose();
   }
@@ -1124,12 +1482,38 @@ class _HomePageState extends State<HomePage> {
         'status': newStatus,
       });
 
+      final rawTeamName = (data['teamName'] ?? '').toString().trim();
+      final normalizedTeamName =
+          rawTeamName.isEmpty || rawTeamName.toLowerCase() == "no team"
+          ? "Unassigned"
+          : rawTeamName;
+
       if (!mounted) return;
       setState(() {
         _responderStatus = newStatus;
         _userName = data['name'] ?? _userName;
-        _teamName = data['teamName'] ?? _teamName;
+        _teamName = normalizedTeamName;
+        _teamId = (data['teamId'] ?? '').toString().trim().isEmpty
+            ? null
+            : data['teamId'].toString();
+        _stationName = (data['stationName'] ?? '').toString().trim().isEmpty
+            ? null
+            : data['stationName'].toString();
+        _vehicleCode = (data['vehicleCode'] ?? '').toString().trim().isEmpty
+            ? null
+            : data['vehicleCode'].toString();
       });
+
+      if (_teamName != "Unassigned") {
+        await _loadTeamTruckInfo();
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _vehiclePlateNumber = null;
+          _leaderName = null;
+          _teamMembers = [];
+        });
+      }
     } catch (e) {
       debugPrint("UpdateUserStatus error: $e");
     }
@@ -1168,63 +1552,99 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildDashboard(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Ready to Respond",
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          _buildTimeCard(),
-          const SizedBox(height: 16),
-          _buildDispatchStatusCard(),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: _buildResponderInfoCard()),
-              const SizedBox(width: 12),
-              Expanded(child: _buildStatusCard()),
-            ],
-          ),
-          const SizedBox(height: 20),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                "Recent Fire Incidents",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedIndex = 1;
-                  });
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFFB71C1C),
-                  padding: EdgeInsets.zero,
-                  minimumSize: const Size(0, 0),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return RefreshIndicator(
+      key: _refreshIndicatorKey,
+      onRefresh: _refreshDashboard,
+      color: const Color(0xFFB71C1C),
+      child: SingleChildScrollView(
+        controller: _dashboardScrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Ready to Respond",
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            _buildTimeCard(),
+            const SizedBox(height: 16),
+            _buildDispatchStatusCard(),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: _buildResponderInfoCard()),
+                const SizedBox(width: 12),
+                Expanded(child: _buildStatusCard()),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Recent Fire Incidents",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _selectedIndex = 1;
+                    });
+                  },
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFB71C1C),
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text(
+                    "View all",
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_recentAlerts.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  vertical: 26,
+                  horizontal: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E5EA),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
                 child: const Text(
-                  "View all",
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  "No recent fire incidents yet.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF636366),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
+              )
+            else
+              Column(
+                children: _recentAlerts.map((alert) {
+                  return _recentIncidentCard(alert);
+                }).toList(),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Column(
-            children: _recentAlerts.map((alert) {
-              return _recentIncidentCard(alert);
-            }).toList(),
-          ),
-          const SizedBox(height: 30),
-        ],
+            const SizedBox(height: 30),
+          ],
+        ),
       ),
     );
   }
@@ -1412,70 +1832,79 @@ class _HomePageState extends State<HomePage> {
         ? "Responder"
         : _userName.trim().split(RegExp(r'\s+')).first;
 
-    return Container(
-      height: 145,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFFF3E0), Color(0xFFFFE0B2)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    final String displayTeam =
+        _teamName.trim().isEmpty || _teamName.trim().toLowerCase() == "no team"
+        ? "Unassigned"
+        : _teamName;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(26),
+      onTap: _showTeamTruckInfoModal,
+      child: Container(
+        height: 145,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFFFFF3E0), Color(0xFFFFE0B2)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(26),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFFB74D).withOpacity(0.22),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFFB74D).withOpacity(0.22),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFFFB74D), Color(0xFFFF8A65)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFFFB74D), Color(0xFFFF8A65)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Center(
-                child: Icon(
-                  Icons.fire_truck_rounded,
-                  color: Colors.white,
-                  size: 50,
+                child: const Center(
+                  child: Icon(
+                    Icons.fire_truck_rounded,
+                    color: Colors.white,
+                    size: 50,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            firstName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF4E342E),
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
+            const SizedBox(height: 10),
+            Text(
+              firstName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF4E342E),
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            "Team $_teamName",
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF6D4C41),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
+            const SizedBox(height: 2),
+            Text(
+              "Team $displayTeam",
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF6D4C41),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1893,6 +2322,8 @@ class _HomePageState extends State<HomePage> {
       icon = Icons.lock_outline;
     }
 
+    final bool noActiveDispatch = _dispatchStatus == "No Active Dispatch";
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -1911,189 +2342,222 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: noActiveDispatch
+            ? CrossAxisAlignment.center
+            : CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 58,
-                height: 58,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.18),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: Colors.white, size: 32),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _dispatchStatus == "Dispatched"
-                          ? "Team $_teamName is dispatched"
-                          : _dispatchStatus,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        height: 1.15,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    if (_dispatchStatus == "Dispatched") ...[
-                      Text(
-                        "Type: ${_currentAlertType ?? 'Unknown'}",
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.95),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                    ],
-                    if (_callerAddress.isNotEmpty) ...[
-                      Text(
-                        "Address: $_callerAddress",
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.95),
-                          fontSize: 14,
-                          height: 1.35,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                    ],
-                    if (_currentDispatchTimestampText.isNotEmpty)
-                      Text(
-                        "Timestamp: $_currentDispatchTimestampText",
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.95),
-                          fontSize: 14,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          if (_dispatchStatus == "Dispatched") ...[
-            const SizedBox(height: 16),
-
-            SizedBox(
-              width: double.infinity,
-              child: SizedBox(
-                height: 46,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    _stopAlarm();
-                    _openAlertDetails();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    elevation: 0,
-                    backgroundColor: Colors.white.withOpacity(0.18),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  icon: const Icon(Icons.visibility_rounded, size: 18),
-                  label: const Text(
-                    "View",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 14),
-
+          if (noActiveDispatch)
             Center(
-              child: GestureDetector(
-                onTap:
-                    (!_isTeamLeader ||
-                        _hasPendingBackupRequest ||
-                        _isRequestingBackup)
-                    ? null
-                    : _requestBackup,
-                child: Opacity(
-                  opacity:
+              child: Column(
+                children: [
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.18),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(icon, color: Colors.white, size: 32),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    "No Active Dispatch",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      height: 1.15,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 32),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _dispatchStatus == "Dispatched"
+                            ? "Team $_teamName is dispatched"
+                            : _dispatchStatus,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      if (_dispatchStatus == "Dispatched") ...[
+                        Text(
+                          "Type: ${_currentAlertType ?? 'Unknown'}",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.95),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                      if (_callerAddress.isNotEmpty) ...[
+                        Text(
+                          "Address: $_callerAddress",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.95),
+                            fontSize: 14,
+                            height: 1.35,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                      if (_currentDispatchTimestampText.isNotEmpty)
+                        Text(
+                          "Timestamp: $_currentDispatchTimestampText",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.95),
+                            fontSize: 14,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (_dispatchStatus == "Dispatched") ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: SizedBox(
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      _stopAlarm();
+                      _openAlertDetails();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      elevation: 0,
+                      backgroundColor: Colors.white.withOpacity(0.18),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    icon: const Icon(Icons.visibility_rounded, size: 18),
+                    label: const Text(
+                      "View",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Center(
+                child: GestureDetector(
+                  onTap:
                       (!_isTeamLeader ||
                           _hasPendingBackupRequest ||
                           _isRequestingBackup)
-                      ? 0.55
-                      : 1,
-                  child: Container(
-                    width: 170,
-                    height: 170,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFFFFEBEE),
-                    ),
-                    child: Center(
-                      child: Container(
-                        width: 130,
-                        height: 130,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Color(0xFFFFCDD2),
-                        ),
-                        child: Center(
-                          child: Container(
-                            width: 98,
-                            height: 98,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFFF4D5A), Color(0xFFFF5F6D)],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(
-                                    0xFFFF5F6D,
-                                  ).withOpacity(0.35),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 8),
+                      ? null
+                      : _requestBackup,
+                  child: Opacity(
+                    opacity:
+                        (!_isTeamLeader ||
+                            _hasPendingBackupRequest ||
+                            _isRequestingBackup)
+                        ? 0.55
+                        : 1,
+                    child: Container(
+                      width: 170,
+                      height: 170,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFFFFEBEE),
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 130,
+                          height: 130,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Color(0xFFFFCDD2),
+                          ),
+                          child: Center(
+                            child: Container(
+                              width: 98,
+                              height: 98,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFFF4D5A),
+                                    Color(0xFFFF5F6D),
+                                  ],
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
                                 ),
-                              ],
-                            ),
-                            child: Center(
-                              child: _isRequestingBackup
-                                  ? const SizedBox(
-                                      width: 26,
-                                      height: 26,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2.4,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                      ),
-                                      child: Text(
-                                        _hasPendingBackupRequest
-                                            ? "Requested"
-                                            : "Request\nBackup",
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFFFF5F6D,
+                                    ).withOpacity(0.35),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                ],
+                              ),
+                              child: Center(
+                                child: _isRequestingBackup
+                                    ? const SizedBox(
+                                        width: 26,
+                                        height: 26,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.4,
                                           color: Colors.white,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                          height: 1.1,
-                                          shadows: [
-                                            Shadow(
-                                              color: Colors.black26,
-                                              blurRadius: 4,
-                                              offset: Offset(0, 2),
-                                            ),
-                                          ],
+                                        ),
+                                      )
+                                    : Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        child: Text(
+                                          _hasPendingBackupRequest
+                                              ? "Requested"
+                                              : "Request\nBackup",
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            height: 1.1,
+                                            shadows: [
+                                              Shadow(
+                                                color: Colors.black26,
+                                                blurRadius: 4,
+                                                offset: Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
+                              ),
                             ),
                           ),
                         ),
@@ -2102,34 +2566,35 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
-            ),
-
-            const SizedBox(height: 14),
-
-            SizedBox(
-              width: double.infinity,
-              child: SizedBox(
-                height: 46,
-                child: ElevatedButton.icon(
-                  onPressed: _isTeamLeader ? _markAsResolved : null,
-                  style: ElevatedButton.styleFrom(
-                    elevation: 0,
-                    backgroundColor: const Color(0xFF2E7D32),
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: Colors.white.withOpacity(0.12),
-                    disabledForegroundColor: Colors.white54,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: SizedBox(
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: _markAsResolved,
+                    style: ElevatedButton.styleFrom(
+                      elevation: 0,
+                      backgroundColor: const Color(0xFF2E7D32),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.white.withOpacity(0.12),
+                      disabledForegroundColor: Colors.white54,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
                     ),
-                  ),
-                  icon: const Icon(Icons.check_circle_rounded, size: 18),
-                  label: const Text(
-                    "Resolve",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    icon: const Icon(Icons.check_circle_rounded, size: 18),
+                    label: const Text(
+                      "Resolve",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ],
         ],
       ),
@@ -2153,17 +2618,206 @@ class _HomePageState extends State<HomePage> {
     _openAlertViewModal(data);
   }
 
-  void _markAsResolved() async {
-    if (!_isTeamLeader) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Only the team leader can resolve the incident."),
-        ),
-      );
-      return;
+  Future<Map<String, dynamic>?> _getCurrentUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return null;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .where('email', isEqualTo: user.email)
+        .limit(1)
+        .get();
+
+    if (snap.docs.isEmpty) return null;
+
+    final data = Map<String, dynamic>.from(snap.docs.first.data());
+    data['docId'] = snap.docs.first.id;
+    return data;
+  }
+
+  Future<void> _cancelPendingBackupRequests(String alertId) async {
+    final pendingBackupSnap = await FirebaseFirestore.instance
+        .collection('backup_requests')
+        .where('alertId', isEqualTo: alertId)
+        .where('status', isEqualTo: 'Pending')
+        .get();
+
+    if (pendingBackupSnap.docs.isEmpty) return;
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    for (final doc in pendingBackupSnap.docs) {
+      batch.update(doc.reference, {
+        'status': 'Cancelled',
+        'cancelReason': 'Alert already resolved before backup dispatch.',
+        'cancelledAt': FieldValue.serverTimestamp(),
+      });
     }
 
-    if (_currentDispatchId == null) return;
+    await batch.commit();
+  }
+
+  Future<void> _finalizeAlertResolution(String alertId) async {
+    final dispatches = await FirebaseFirestore.instance
+        .collection('dispatches')
+        .where('alertId', isEqualTo: alertId)
+        .get();
+
+    final batch = FirebaseFirestore.instance.batch();
+
+    final Set<String> responderIds = {};
+    final Set<String> teamIds = {};
+    final Set<String> teamNames = {};
+    final Set<String> vehicleIds = {};
+    final Set<String> vehicleCodes = {};
+
+    for (final doc in dispatches.docs) {
+      final data = doc.data();
+
+      batch.update(doc.reference, {
+        'status': 'Resolved',
+        'resolvedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (data['teamId'] != null &&
+          data['teamId'].toString().trim().isNotEmpty) {
+        teamIds.add(data['teamId'].toString());
+      }
+
+      if (data['teamName'] != null &&
+          data['teamName'].toString().trim().isNotEmpty) {
+        teamNames.add(data['teamName'].toString());
+      }
+
+      if (data['vehicleId'] != null &&
+          data['vehicleId'].toString().trim().isNotEmpty) {
+        vehicleIds.add(data['vehicleId'].toString());
+      }
+
+      if (data['vehicleCode'] != null &&
+          data['vehicleCode'].toString().trim().isNotEmpty) {
+        vehicleCodes.add(data['vehicleCode'].toString());
+      }
+
+      final responders = (data["responders"] as List<dynamic>? ?? []);
+      for (final r in responders) {
+        if (r is Map) {
+          if (r["id"] != null && r["id"].toString().trim().isNotEmpty) {
+            responderIds.add(r["id"].toString());
+          }
+          if (r["teamId"] != null && r["teamId"].toString().trim().isNotEmpty) {
+            teamIds.add(r["teamId"].toString());
+          }
+          if (r["team"] != null && r["team"].toString().trim().isNotEmpty) {
+            teamNames.add(r["team"].toString());
+          } else if (r["teamName"] != null &&
+              r["teamName"].toString().trim().isNotEmpty) {
+            teamNames.add(r["teamName"].toString());
+          }
+          if (r["vehicleId"] != null &&
+              r["vehicleId"].toString().trim().isNotEmpty) {
+            vehicleIds.add(r["vehicleId"].toString());
+          }
+          if (r["vehicleCode"] != null &&
+              r["vehicleCode"].toString().trim().isNotEmpty) {
+            vehicleCodes.add(r["vehicleCode"].toString());
+          }
+        }
+      }
+
+      final members = (data["members"] as List<dynamic>? ?? []);
+      for (final m in members) {
+        if (m is Map) {
+          if (m["id"] != null && m["id"].toString().trim().isNotEmpty) {
+            responderIds.add(m["id"].toString());
+          }
+          if (m["teamId"] != null && m["teamId"].toString().trim().isNotEmpty) {
+            teamIds.add(m["teamId"].toString());
+          }
+          if (m["teamName"] != null &&
+              m["teamName"].toString().trim().isNotEmpty) {
+            teamNames.add(m["teamName"].toString());
+          }
+          if (m["vehicleId"] != null &&
+              m["vehicleId"].toString().trim().isNotEmpty) {
+            vehicleIds.add(m["vehicleId"].toString());
+          }
+          if (m["vehicleCode"] != null &&
+              m["vehicleCode"].toString().trim().isNotEmpty) {
+            vehicleCodes.add(m["vehicleCode"].toString());
+          }
+        }
+      }
+    }
+
+    batch.update(FirebaseFirestore.instance.collection('alerts').doc(alertId), {
+      'status': 'Resolved',
+      'resolvedAt': FieldValue.serverTimestamp(),
+    });
+
+    for (final id in responderIds) {
+      batch.update(FirebaseFirestore.instance.collection('users').doc(id), {
+        'status': 'Available',
+      });
+    }
+
+    for (final id in teamIds) {
+      batch.update(FirebaseFirestore.instance.collection('teams').doc(id), {
+        'status': 'Available',
+      });
+    }
+
+    for (final id in vehicleIds) {
+      batch.update(FirebaseFirestore.instance.collection('vehicles').doc(id), {
+        'status': 'Available',
+      });
+    }
+
+    for (final code in vehicleCodes) {
+      final vehicleSnap = await FirebaseFirestore.instance
+          .collection('vehicles')
+          .where('code', isEqualTo: code)
+          .get();
+
+      for (final v in vehicleSnap.docs) {
+        batch.update(v.reference, {'status': 'Available'});
+      }
+    }
+
+    for (final teamName in teamNames) {
+      final vehicles = await FirebaseFirestore.instance
+          .collection('vehicles')
+          .where('assignedTeam', isEqualTo: teamName)
+          .get();
+
+      for (final v in vehicles.docs) {
+        batch.update(v.reference, {'status': 'Available'});
+      }
+    }
+
+    await batch.commit();
+    await _cancelPendingBackupRequests(alertId);
+
+    if (!mounted) return;
+
+    setState(() {
+      _dispatchStatus = "Resolved";
+      _hasPendingBackupRequest = false;
+      _currentDispatchId = null;
+      _currentAlertId = null;
+      _currentWaveNumber = 1;
+      _isTeamLeader = false;
+      _currentAlertType = null;
+      _currentDispatchTimestampText = "";
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Incident resolved. All teams cleared.")),
+    );
+  }
+
+  Future<void> _markAsResolved() async {
+    if (_currentDispatchId == null || _currentAlertId == null) return;
 
     final bool? confirm = await showDialog<bool>(
       context: context,
@@ -2173,9 +2827,8 @@ class _HomePageState extends State<HomePage> {
           "Confirm Resolve",
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        content: const Text(
-          "Are you sure you want to mark this incident as resolved?",
-        ),
+        content: const Text('''Leaders can resolve immediately.
+Members need at least 2 confirmations total, including backup teams.'''),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2199,6 +2852,15 @@ class _HomePageState extends State<HomePage> {
     if (confirm != true) return;
 
     try {
+      final currentUser = await _getCurrentUserData();
+      if (currentUser == null) return;
+
+      final userId = currentUser['docId'].toString();
+      final userName = (currentUser['name'] ?? 'Responder').toString();
+      final userEmail = (currentUser['email'] ?? '').toString().toLowerCase();
+      final userTeamId = (currentUser['teamId'] ?? '').toString();
+      final userTeamName = (currentUser['teamName'] ?? '').toString();
+
       final currentDispatch = await FirebaseFirestore.instance
           .collection('dispatches')
           .doc(_currentDispatchId)
@@ -2207,105 +2869,238 @@ class _HomePageState extends State<HomePage> {
       if (!currentDispatch.exists) return;
 
       final currentData = currentDispatch.data() as Map<String, dynamic>;
-      final alertId = currentData["alertId"];
+      final alertId = currentData["alertId"]?.toString();
 
-      if (alertId == null) return;
+      if (alertId == null || alertId.isEmpty) return;
 
-      final dispatches = await FirebaseFirestore.instance
-          .collection('dispatches')
-          .where('alertId', isEqualTo: alertId)
+      final alertDoc = await FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(alertId)
           .get();
 
-      final batch = FirebaseFirestore.instance.batch();
+      if (alertDoc.exists) {
+        final alertData = alertDoc.data() as Map<String, dynamic>;
+        if ((alertData['status'] ?? '').toString() == 'Resolved') {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This alert is already resolved.')),
+          );
+          return;
+        }
+      }
 
-      final Set<String> responderIds = {};
-      final Set<String> teamIds = {};
-      final Set<String> teamNames = {};
+      final activeDispatches = await FirebaseFirestore.instance
+          .collection('dispatches')
+          .where('alertId', isEqualTo: alertId)
+          .where('status', isEqualTo: 'Dispatched')
+          .get();
 
-      for (final doc in dispatches.docs) {
+      if (activeDispatches.docs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No active dispatched teams found.")),
+        );
+        return;
+      }
+
+      bool isLeaderVote = false;
+      final Set<String> allowedResponderIds = {};
+      final Set<String> allowedResponderEmails = {};
+
+      for (final doc in activeDispatches.docs) {
         final data = doc.data();
 
-        batch.update(doc.reference, {'status': 'Resolved'});
+        if (data['leaderId'] != null &&
+            data['leaderId'].toString().trim().isNotEmpty) {
+          if (data['leaderId'].toString() == userId) {
+            isLeaderVote = true;
+          }
+        }
 
-        final responders = (data["responders"] as List<dynamic>? ?? []);
+        final responders = (data['responders'] as List<dynamic>? ?? []);
         for (final r in responders) {
           if (r is Map) {
-            if (r["id"] != null) {
-              responderIds.add(r["id"].toString());
-            }
-            if (r["teamId"] != null) {
-              teamIds.add(r["teamId"].toString());
-            }
-            if (r["team"] != null) {
-              teamNames.add(r["team"].toString());
-            } else if (r["teamName"] != null) {
-              teamNames.add(r["teamName"].toString());
+            final rid = (r['id'] ?? '').toString().trim();
+            final remail = (r['email'] ?? '').toString().toLowerCase().trim();
+            if (rid.isNotEmpty) allowedResponderIds.add(rid);
+            if (remail.isNotEmpty) allowedResponderEmails.add(remail);
+            if (rid == userId || remail == userEmail) {
+              final leaderId = (r['leaderId'] ?? '').toString().trim();
+              if (leaderId.isNotEmpty && leaderId == userId) {
+                isLeaderVote = true;
+              }
             }
           }
         }
 
-        final members = (data["members"] as List<dynamic>? ?? []);
+        final members = (data['members'] as List<dynamic>? ?? []);
         for (final m in members) {
           if (m is Map) {
-            if (m["id"] != null) {
-              responderIds.add(m["id"].toString());
+            final mid = (m['id'] ?? '').toString().trim();
+            final memail = (m['email'] ?? '').toString().toLowerCase().trim();
+            if (mid.isNotEmpty) allowedResponderIds.add(mid);
+            if (memail.isNotEmpty) allowedResponderEmails.add(memail);
+          }
+        }
+
+        String? matchedTeamId;
+        String? matchedTeamName;
+
+        for (final r in responders) {
+          if (r is Map) {
+            final rid = (r['id'] ?? '').toString().trim();
+            final remail = (r['email'] ?? '').toString().toLowerCase().trim();
+            if (rid == userId || remail == userEmail) {
+              matchedTeamId = (r['teamId'] ?? '').toString().trim();
+              matchedTeamName = (r['teamName'] ?? r['team'] ?? '')
+                  .toString()
+                  .trim();
+              break;
             }
-            if (m["teamId"] != null) {
-              teamIds.add(m["teamId"].toString());
+          }
+        }
+
+        if (matchedTeamId == null && matchedTeamName == null) {
+          for (final m in members) {
+            if (m is Map) {
+              final mid = (m['id'] ?? '').toString().trim();
+              final memail = (m['email'] ?? '').toString().toLowerCase().trim();
+              if (mid == userId || memail == userEmail) {
+                matchedTeamId = (m['teamId'] ?? '').toString().trim();
+                matchedTeamName = (m['teamName'] ?? '').toString().trim();
+                break;
+              }
             }
-            if (m["teamName"] != null) {
-              teamNames.add(m["teamName"].toString());
+          }
+        }
+
+        matchedTeamId = (matchedTeamId == null || matchedTeamId.isEmpty)
+            ? userTeamId
+            : matchedTeamId;
+        matchedTeamName = (matchedTeamName == null || matchedTeamName.isEmpty)
+            ? userTeamName
+            : matchedTeamName;
+
+        if (!isLeaderVote && matchedTeamId.isNotEmpty) {
+          final teamDoc = await FirebaseFirestore.instance
+              .collection('teams')
+              .doc(matchedTeamId)
+              .get();
+
+          if (teamDoc.exists) {
+            final teamData = teamDoc.data() as Map<String, dynamic>;
+            final leaderId = (teamData['leaderId'] ?? '').toString().trim();
+            if (leaderId == userId) {
+              isLeaderVote = true;
+            }
+          }
+        } else if (!isLeaderVote && matchedTeamName.isNotEmpty) {
+          final teamSnap = await FirebaseFirestore.instance
+              .collection('teams')
+              .where('teamName', isEqualTo: matchedTeamName)
+              .limit(1)
+              .get();
+
+          if (teamSnap.docs.isNotEmpty) {
+            final teamData = teamSnap.docs.first.data();
+            final leaderId = (teamData['leaderId'] ?? '').toString().trim();
+            if (leaderId == userId) {
+              isLeaderVote = true;
             }
           }
         }
       }
 
-      batch.update(
-        FirebaseFirestore.instance.collection('alerts').doc(alertId),
-        {'status': 'Resolved'},
-      );
+      final isAllowedResponder =
+          allowedResponderIds.contains(userId) ||
+          allowedResponderEmails.contains(userEmail);
 
-      for (final id in responderIds) {
-        batch.update(FirebaseFirestore.instance.collection('users').doc(id), {
-          'status': 'Available',
-        });
+      if (!isAllowedResponder) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You are not part of this active dispatch.'),
+          ),
+        );
+        return;
       }
 
-      for (final id in teamIds) {
-        batch.update(FirebaseFirestore.instance.collection('teams').doc(id), {
-          'status': 'Available',
-        });
-      }
+      final voteRef = FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(alertId)
+          .collection('resolve_votes')
+          .doc(userId);
 
-      for (final teamName in teamNames) {
-        final vehicles = await FirebaseFirestore.instance
-            .collection('vehicles')
-            .where('assignedTeam', isEqualTo: teamName)
-            .get();
+      await voteRef.set({
+        'userId': userId,
+        'name': userName,
+        'email': userEmail,
+        'teamId': userTeamId,
+        'teamName': userTeamName,
+        'isLeader': isLeaderVote,
+        'dispatchId': _currentDispatchId,
+        'votedAt': FieldValue.serverTimestamp(),
+      });
 
-        for (final v in vehicles.docs) {
-          batch.update(v.reference, {'status': 'Available'});
+      final votesSnap = await FirebaseFirestore.instance
+          .collection('alerts')
+          .doc(alertId)
+          .collection('resolve_votes')
+          .get();
+
+      int leaderVotes = 0;
+      int memberVotes = 0;
+
+      for (final doc in votesSnap.docs) {
+        final data = doc.data();
+        final votedUserId = (data['userId'] ?? '').toString().trim();
+        final votedEmail = (data['email'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim();
+        final isAllowedVote =
+            allowedResponderIds.contains(votedUserId) ||
+            allowedResponderEmails.contains(votedEmail);
+
+        if (!isAllowedVote) continue;
+
+        final isLeader = data['isLeader'] == true;
+        if (isLeader) {
+          leaderVotes++;
+        } else {
+          memberVotes++;
         }
       }
 
-      await batch.commit();
+      final bool shouldResolve = leaderVotes >= 1 || memberVotes >= 2;
+
+      if (shouldResolve) {
+        await _finalizeAlertResolution(alertId);
+        return;
+      }
 
       if (!mounted) return;
 
-      setState(() {
-        _dispatchStatus = "Resolved";
-        _hasPendingBackupRequest = false;
-        _currentDispatchId = null;
-        _currentAlertId = null;
-        _currentWaveNumber = 1;
-        _isTeamLeader = false;
-        _currentAlertType = null;
-        _currentDispatchTimestampText = "";
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Incident resolved. All teams cleared.")),
-      );
+      if (isLeaderVote) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Leader confirmation received. Resolving incident...',
+            ),
+          ),
+        );
+      } else {
+        final remainingVotes = (2 - memberVotes).clamp(0, 2);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              remainingVotes > 0
+                  ? 'Resolve noted. Need $remainingVotes more member confirmation.'
+                  : 'Resolve noted.',
+            ),
+          ),
+        );
+      }
     } catch (e) {
       debugPrint("Resolve error: $e");
 
@@ -2347,78 +3142,261 @@ class _HomePageState extends State<HomePage> {
     String? alertAddress,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || user.email == null) return;
 
     try {
-      // ✅ Get logged-in responder
-      final userSnap = await FirebaseFirestore.instance
+      final userQuery = await FirebaseFirestore.instance
           .collection('users')
           .where('email', isEqualTo: user.email)
           .limit(1)
           .get();
 
-      if (userSnap.docs.isEmpty) {
+      if (userQuery.docs.isEmpty) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Responder record not found.")),
         );
         return;
       }
 
-      final userDoc = userSnap.docs.first.data() as Map<String, dynamic>;
-      final stationId = userDoc['stationId']?.toString();
+      final userDoc = userQuery.docs.first;
+      final userData = userDoc.data();
 
-      if (stationId == null || stationId.isEmpty) {
+      String stationId = (userData['stationId'] ?? '').toString().trim();
+      String stationName = (userData['stationName'] ?? '').toString().trim();
+      String teamId = (userData['teamId'] ?? '').toString().trim();
+      String teamName = (userData['teamName'] ?? '').toString().trim();
+
+      // 1) Direct user station
+      if (stationId.isNotEmpty) {
+        final stationSnap = await FirebaseFirestore.instance
+            .collection('stations')
+            .doc(stationId)
+            .get();
+
+        if (stationSnap.exists) {
+          final stationData = stationSnap.data() as Map<String, dynamic>;
+          final stationLat = (stationData['latitude'] as num?)?.toDouble();
+          final stationLng = (stationData['longitude'] as num?)?.toDouble();
+          final stationAddress = (stationData['address'] ?? '')
+              .toString()
+              .trim();
+
+          final resolvedStationName =
+              (stationData['name']?.toString().trim().isNotEmpty ?? false)
+              ? stationData['name'].toString().trim()
+              : (stationName.isNotEmpty ? stationName : 'Station');
+
+          if (stationLat == null || stationLng == null) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Station coordinates missing.")),
+            );
+            return;
+          }
+
+          if (!mounted) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MapNavigationPage(
+                stationLat: stationLat,
+                stationLng: stationLng,
+                stationAddress: stationAddress.isNotEmpty
+                    ? stationAddress
+                    : "No station address",
+                stationName: resolvedStationName,
+                alertLat: alertLat,
+                alertLng: alertLng,
+                alertAddress: alertAddress,
+                apiKey: "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680",
+              ),
+            ),
+          );
+          return;
+        }
+      }
+
+      // 2) Fallback: resolve team first if teamId missing but teamName exists
+      if (teamId.isEmpty && teamName.isNotEmpty) {
+        final teamQuery = await FirebaseFirestore.instance
+            .collection('teams')
+            .where('teamName', isEqualTo: teamName)
+            .limit(1)
+            .get();
+
+        if (teamQuery.docs.isNotEmpty) {
+          teamId = teamQuery.docs.first.id;
+        }
+      }
+
+      // 3) Fallback: get station from team document
+      if (stationId.isEmpty && teamId.isNotEmpty) {
+        final teamSnap = await FirebaseFirestore.instance
+            .collection('teams')
+            .doc(teamId)
+            .get();
+
+        if (teamSnap.exists) {
+          final teamData = teamSnap.data() as Map<String, dynamic>;
+
+          stationId = (teamData['stationId'] ?? '').toString().trim();
+
+          if (stationName.isEmpty) {
+            stationName = (teamData['stationName'] ?? '').toString().trim();
+          }
+
+          if (teamName.isEmpty) {
+            teamName = (teamData['teamName'] ?? '').toString().trim();
+          }
+
+          if (stationId.isNotEmpty) {
+            await FirebaseFirestore.instance
+                .collection('users')
+                .doc(userDoc.id)
+                .update({
+                  'teamId': teamId,
+                  if (teamName.isNotEmpty) 'teamName': teamName,
+                  'stationId': stationId,
+                  if (stationName.isNotEmpty) 'stationName': stationName,
+                });
+          }
+        }
+      }
+
+      // 4) Fallback: resolve station by station teamIds/teamNames arrays
+      if (stationId.isEmpty && teamId.isNotEmpty) {
+        final stationByTeamId = await FirebaseFirestore.instance
+            .collection('stations')
+            .where('teamIds', arrayContains: teamId)
+            .limit(1)
+            .get();
+
+        if (stationByTeamId.docs.isNotEmpty) {
+          final stationDoc = stationByTeamId.docs.first;
+          final stationData = stationDoc.data();
+
+          stationId = stationDoc.id;
+
+          if (stationName.isEmpty) {
+            stationName = (stationData['name'] ?? '').toString().trim();
+          }
+
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userDoc.id)
+              .update({
+                'teamId': teamId,
+                if (teamName.isNotEmpty) 'teamName': teamName,
+                'stationId': stationId,
+                if (stationName.isNotEmpty) 'stationName': stationName,
+              });
+        }
+      }
+
+      if (stationId.isEmpty && teamName.isNotEmpty) {
+        final stationByTeamName = await FirebaseFirestore.instance
+            .collection('stations')
+            .where('teamNames', arrayContains: teamName)
+            .limit(1)
+            .get();
+
+        if (stationByTeamName.docs.isNotEmpty) {
+          final stationDoc = stationByTeamName.docs.first;
+          final stationData = stationDoc.data();
+
+          stationId = stationDoc.id;
+
+          if (stationName.isEmpty) {
+            stationName = (stationData['name'] ?? '').toString().trim();
+          }
+
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userDoc.id)
+              .update({
+                if (teamId.isNotEmpty) 'teamId': teamId,
+                if (teamName.isNotEmpty) 'teamName': teamName,
+                'stationId': stationId,
+                if (stationName.isNotEmpty) 'stationName': stationName,
+              });
+        }
+      }
+
+      if (stationId.isEmpty) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Responder station not assigned.")),
+          const SnackBar(
+            content: Text("Responder station cannot be found from team yet."),
+          ),
         );
         return;
       }
 
-      // ✅ Get actual station document
+      // 5) Open final station
       final stationSnap = await FirebaseFirestore.instance
           .collection('stations')
           .doc(stationId)
           .get();
 
       if (!stationSnap.exists) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Station record not found.")),
         );
         return;
       }
 
-      final stationDoc = stationSnap.data() as Map<String, dynamic>;
+      final stationData = stationSnap.data() as Map<String, dynamic>;
+      final stationLat = (stationData['latitude'] as num?)?.toDouble();
+      final stationLng = (stationData['longitude'] as num?)?.toDouble();
+      final stationAddress = (stationData['address'] ?? '').toString().trim();
 
-      final stationLat = (stationDoc['latitude'] as num?)?.toDouble();
-      final stationLng = (stationDoc['longitude'] as num?)?.toDouble();
-      final stationAddress =
-          stationDoc['address']?.toString() ?? "No station address";
-      final stationName = stationDoc['name']?.toString() ?? "Station";
+      final resolvedStationName =
+          (stationData['name']?.toString().trim().isNotEmpty ?? false)
+          ? stationData['name'].toString().trim()
+          : (stationName.isNotEmpty ? stationName : 'Station');
 
       if (stationLat == null || stationLng == null) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Station coordinates missing.")),
         );
         return;
       }
 
+      // Save clean values back to user doc
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDoc.id)
+          .update({
+            if (teamId.isNotEmpty) 'teamId': teamId,
+            if (teamName.isNotEmpty) 'teamName': teamName,
+            'stationId': stationId,
+            'stationName': resolvedStationName,
+          });
+
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => MapNavigationPage(
             stationLat: stationLat,
             stationLng: stationLng,
-            stationAddress: stationAddress,
-            stationName: stationName,
+            stationAddress: stationAddress.isNotEmpty
+                ? stationAddress
+                : "No station address",
+            stationName: resolvedStationName,
             alertLat: alertLat,
             alertLng: alertLng,
             alertAddress: alertAddress,
-            apiKey: "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680", // ✅ make sure apiKey exists in your class
+            apiKey: "AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680",
           ),
         ),
       );
     } catch (e) {
       debugPrint("Navigation error: $e");
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text("Navigation error: $e")));

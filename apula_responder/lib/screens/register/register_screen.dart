@@ -375,7 +375,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 readOnly: true,
                 enabled: !_isSubmitting,
                 decoration: _input(
-                  "Select Station Address (Tap to Open Map)",
+                  "Select Address (Tap to Open Map)",
                 ).copyWith(
                   suffixIcon: const Icon(Icons.map),
                 ),

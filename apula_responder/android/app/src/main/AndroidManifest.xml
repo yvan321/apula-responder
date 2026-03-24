@@ -6,35 +6,28 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- SMS -->
-    <uses-permission android:name="android.permission.SEND_SMS"/>
-    <uses-permission android:name="android.permission.RECEIVE_SMS"/>
-    <uses-permission android:name="android.permission.READ_SMS"/>
-    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
-    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
-
     <application
         android:label="Apula Responder"
         tools:replace="android:label"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- ⭐ GOOGLE MAPS API KEY (REQUIRED) -->
+        <!-- GOOGLE MAPS API KEY -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyC4Ai-W_V2M7qftiuQBYcnyCL8oqaDF680" />
 
-        <!-- 🔥 REQUIRED FOR FCM NOTIFICATIONS -->
+        <!-- FCM NOTIFICATIONS -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="high_importance_channel" />
 
-        <!-- 🔥 Auto-init FCM -->
+        <!-- Firebase Messaging auto init -->
         <meta-data
             android:name="firebase_messaging_auto_init_enabled"
             android:value="true" />
 
-        <!-- 🔥 Ensure Firebase Analytics works correctly -->
+        <!-- Disable automatic screen reporting -->
         <meta-data
             android:name="google_analytics_automatic_screen_reporting_enabled"
             android:value="false" />
