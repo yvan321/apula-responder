@@ -191,12 +191,6 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     ),
                     const SizedBox(height: 10),
                     _modernInfoCard(
-                      icon: Icons.swap_horiz_rounded,
-                      label: "Dispatch Type",
-                      value: dispatchType,
-                    ),
-                    const SizedBox(height: 10),
-                    _modernInfoCard(
                       icon: Icons.home_rounded,
                       label: "Address",
                       value: address,
@@ -216,41 +210,46 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     const SizedBox(height: 10),
                     _modernInfoCard(
                       icon: Icons.access_time_rounded,
-                      label: "Timestamp",
+                      label: "Time",
                       value: formattedTimestamp,
                     ),
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 10,
-                      offset: Offset(0, -2),
+              SafeArea(
+                top: false,
+                child: Container(
+                  padding: EdgeInsets.fromLTRB(20, 14, 20, 8),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(24),
                     ),
-                  ],
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: ElevatedButton.styleFrom(
-                      elevation: 0,
-                      backgroundColor: const Color(0xFFE5E5EA),
-                      foregroundColor: const Color(0xFF1C1C1E),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x14000000),
+                        blurRadius: 10,
+                        offset: Offset(0, -2),
                       ),
-                    ),
-                    child: const Text(
-                      "Close",
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ],
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        elevation: 0,
+                        backgroundColor: const Color(0xFFB71C1C),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        "Close",
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
                 ),
@@ -333,11 +332,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
               color: const Color(0xFFF2F2F7),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(
-              icon,
-              color: const Color(0xFFB71C1C),
-              size: 22,
-            ),
+            child: Icon(icon, color: const Color(0xFFB71C1C), size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -456,7 +451,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
         child: Container(
           height: double.infinity,
           width: double.infinity,
-          padding: EdgeInsets.fromLTRB(20, _selectionMode ? 12 : 20, 20, 20),
+          padding: EdgeInsets.fromLTRB(20, _selectionMode ? 12 : 20, 20, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -548,8 +543,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                 color: selected
                                     ? const Color(0xFFFFD7D7)
                                     : read
-                                        ? const Color(0xFFE5E5EA)
-                                        : const Color(0xFFB71C1C),
+                                    ? const Color(0xFFE5E5EA)
+                                    : const Color(0xFFB71C1C),
                                 borderRadius: BorderRadius.circular(20),
                                 border: selected
                                     ? Border.all(
@@ -588,8 +583,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                       color: selected
                                           ? Colors.white70
                                           : read
-                                              ? const Color(0xFFD1D1D6)
-                                              : Colors.white24,
+                                          ? const Color(0xFFD1D1D6)
+                                          : Colors.white24,
                                       borderRadius: BorderRadius.circular(14),
                                     ),
                                     child: Icon(
@@ -598,8 +593,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                       color: selected
                                           ? const Color(0xFFB71C1C)
                                           : read
-                                              ? const Color(0xFFB71C1C)
-                                              : Colors.white,
+                                          ? const Color(0xFFB71C1C)
+                                          : Colors.white,
                                     ),
                                   ),
                                   const SizedBox(width: 14),
@@ -618,8 +613,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                             color: selected
                                                 ? const Color(0xFF1C1C1E)
                                                 : read
-                                                    ? const Color(0xFF1C1C1E)
-                                                    : Colors.white,
+                                                ? const Color(0xFF1C1C1E)
+                                                : Colors.white,
                                           ),
                                         ),
                                         const SizedBox(height: 4),
@@ -630,8 +625,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                             color: selected
                                                 ? const Color(0xFF3A3A3C)
                                                 : read
-                                                    ? const Color(0xFF3A3A3C)
-                                                    : Colors.white70,
+                                                ? const Color(0xFF3A3A3C)
+                                                : Colors.white70,
                                           ),
                                         ),
                                         const SizedBox(height: 6),
@@ -642,8 +637,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                             color: selected
                                                 ? const Color(0xFF3A3A3C)
                                                 : read
-                                                    ? const Color(0xFF3A3A3C)
-                                                    : Colors.white70,
+                                                ? const Color(0xFF3A3A3C)
+                                                : Colors.white70,
                                           ),
                                         ),
                                       ],
@@ -653,7 +648,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                     Container(
                                       width: 10,
                                       height: 10,
-                                      margin: const EdgeInsets.only(left: 8, top: 4),
+                                      margin: const EdgeInsets.only(
+                                        left: 8,
+                                        top: 4,
+                                      ),
                                       decoration: const BoxDecoration(
                                         color: Colors.white,
                                         shape: BoxShape.circle,

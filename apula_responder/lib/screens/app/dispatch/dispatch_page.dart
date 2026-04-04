@@ -214,11 +214,7 @@ class _DispatchPageState extends State<DispatchPage> {
               color: const Color(0xFFF2F2F7),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(
-              icon,
-              color: const Color(0xFFB71C1C),
-              size: 22,
-            ),
+            child: Icon(icon, color: const Color(0xFFB71C1C), size: 22),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -356,12 +352,6 @@ class _DispatchPageState extends State<DispatchPage> {
                     ),
                     const SizedBox(height: 10),
                     _modernInfoCard(
-                      icon: Icons.swap_horiz_rounded,
-                      label: "Dispatch Type",
-                      value: dispatchType,
-                    ),
-                    const SizedBox(height: 10),
-                    _modernInfoCard(
                       icon: Icons.person_rounded,
                       label: "Reporter",
                       value: reporter,
@@ -381,7 +371,7 @@ class _DispatchPageState extends State<DispatchPage> {
                     const SizedBox(height: 10),
                     _modernInfoCard(
                       icon: Icons.access_time_rounded,
-                      label: "Timestamp",
+                      label: "Dispatch Time",
                       value: formattedTimestamp,
                     ),
                     const SizedBox(height: 14),
@@ -456,35 +446,40 @@ class _DispatchPageState extends State<DispatchPage> {
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 10,
-                      offset: Offset(0, -2),
+              SafeArea(
+                top: false,
+                child: Container(
+                  padding: EdgeInsets.fromLTRB(20, 14, 20, 8),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(24),
                     ),
-                  ],
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: ElevatedButton.styleFrom(
-                      elevation: 0,
-                      backgroundColor: const Color(0xFFE5E5EA),
-                      foregroundColor: const Color(0xFF1C1C1E),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x14000000),
+                        blurRadius: 10,
+                        offset: Offset(0, -2),
                       ),
-                    ),
-                    child: const Text(
-                      "Close",
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ],
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        elevation: 0,
+                        backgroundColor: const Color(0xFFB71C1C),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        "Close",
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
                 ),
@@ -518,9 +513,7 @@ class _DispatchPageState extends State<DispatchPage> {
                     fillColor: Colors.white,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(
-                        color: Color(0xFFD7CCC8),
-                      ),
+                      borderSide: const BorderSide(color: Color(0xFFD7CCC8)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
@@ -599,14 +592,20 @@ class _DispatchPageState extends State<DispatchPage> {
 
       final String reporter =
           data["userReported"]?.toString().toLowerCase() ?? "";
-      final String status = data["status"]?.toString().toLowerCase() ?? "";
-      final String address = data["userAddress"]?.toString().toLowerCase() ?? "";
+      final String status =
+          data["status"]?.toString().toLowerCase().trim() ?? "";
+      final String address =
+          data["userAddress"]?.toString().toLowerCase() ?? "";
       final String alertType =
           data["alertType"]?.toString().toLowerCase() ?? "";
       final String contact =
           data["userContact"]?.toString().toLowerCase() ?? "";
-      final String dispatchType =
-          _resolveDispatchType(data).toLowerCase();
+      final String dispatchType = _resolveDispatchType(data).toLowerCase();
+
+      // HIDE RESOLVED
+      if (status == "resolved") {
+        return false;
+      }
 
       final DateTime ts = (data["timestamp"] as Timestamp).toDate();
       final String timestampFormatted =
@@ -639,7 +638,17 @@ class _DispatchPageState extends State<DispatchPage> {
         "${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')} "
         "${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}";
 
-    final bool statusResolved = data["status"] == "Resolved";
+    final String statusText = (data["status"] ?? "N/A").toString().trim();
+    final String statusLower = statusText.toLowerCase();
+
+    final bool isConfirmed = statusLower == "confirmed";
+    final bool isValidated = statusLower == "validated";
+
+    final List<Color> statusColors = isConfirmed
+        ? const [Color(0xFF1565C0), Color(0xFF42A5F5)]
+        : isValidated
+        ? const [Color(0xFF2E7D32), Color(0xFF66BB6A)]
+        : const [Color(0xFFD32F2F), Color(0xFFFF7043)];
 
     return GestureDetector(
       onTap: () => _openDetailsModal(data),
@@ -681,22 +690,14 @@ class _DispatchPageState extends State<DispatchPage> {
                   ),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: statusResolved
-                          ? const [
-                              Color(0xFF43A047),
-                              Color(0xFF66BB6A),
-                            ]
-                          : const [
-                              Color(0xFFD32F2F),
-                              Color(0xFFFF7043),
-                            ],
+                      colors: statusColors,
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    data["status"]?.toString() ?? "N/A",
+                    statusText,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
