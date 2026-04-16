@@ -265,6 +265,12 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
   @override
   Widget build(BuildContext context) {
     const redColor = Color(0xFFA30000);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final readOnlyTextColor = isDark ? Colors.white : Colors.black;
+    final readOnlyFillColor =
+        isDark ? const Color(0xFF2B2B2B) : const Color(0xFFF3F3F3);
+    final readOnlyIconColor = isDark ? Colors.white70 : Colors.black54;
 
     return Scaffold(
       body: SafeArea(
@@ -311,28 +317,34 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                             TextField(
                               controller: _emailController,
                               readOnly: true,
-                              style: const TextStyle(
-                                color: Colors.black,
+                              style: TextStyle(
+                                color: readOnlyTextColor,
                                 fontWeight: FontWeight.w500,
                               ),
                               decoration: _input("Email").copyWith(
-                                suffixIcon: const Icon(Icons.lock_outline),
+                                suffixIcon: Icon(
+                                  Icons.lock_outline,
+                                  color: readOnlyIconColor,
+                                ),
                                 filled: true,
-                                fillColor: const Color(0xFFF3F3F3),
+                                fillColor: readOnlyFillColor,
                               ),
                             ),
                             const SizedBox(height: 20),
                             TextField(
                               controller: _teamController,
                               readOnly: true,
-                              style: const TextStyle(
-                                color: Colors.black,
+                              style: TextStyle(
+                                color: readOnlyTextColor,
                                 fontWeight: FontWeight.w500,
                               ),
                               decoration: _input("Team").copyWith(
-                                suffixIcon: const Icon(Icons.groups_rounded),
+                                suffixIcon: Icon(
+                                  Icons.groups_rounded,
+                                  color: readOnlyIconColor,
+                                ),
                                 filled: true,
-                                fillColor: const Color(0xFFF3F3F3),
+                                fillColor: readOnlyFillColor,
                               ),
                             ),
                             const SizedBox(height: 20),

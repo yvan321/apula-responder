@@ -16,9 +16,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:lottie/lottie.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -33,6 +36,10 @@ class _HomePageState extends State<HomePage> {
   Timer? _timer;
   bool _isDay = true;
   String? _lastDispatchId;
+
+  bool _validatePressed = false;
+
+  bool _isPageLoading = true;
 
   String _dispatchStatus = "Loading...";
   StreamSubscription? _dispatchSub;
@@ -72,6 +79,21 @@ class _HomePageState extends State<HomePage> {
 
   String? _currentAlertType;
   String _currentDispatchTimestampText = "";
+  String _currentValidatedTimestampText = "";
+  String _currentConfirmedTimestampText = "";
+
+  final GlobalKey _weatherCardKey = GlobalKey();
+  final GlobalKey _responderInfoKey = GlobalKey();
+  final GlobalKey _availabilityKey = GlobalKey();
+  final GlobalKey _dispatchStatusKey = GlobalKey();
+
+  final GlobalKey _navHomeKey = GlobalKey();
+  final GlobalKey _navDispatchKey = GlobalKey();
+  final GlobalKey _navNotificationsKey = GlobalKey();
+  final GlobalKey _navSettingsKey = GlobalKey();
+
+  TutorialCoachMark? _tutorialCoachMark;
+  bool _tutorialShownThisSession = false;
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
@@ -82,14 +104,39 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showInitialLoading();
+    });
+
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
+
     _listenToDispatchStatus();
     _loadRecentAlerts();
     _getResponderStatus();
     _listenUnreadNotifications();
     _initializeLocalNotifications();
     _loadWeatherCardData();
+  }
+
+  Future<void> _showInitialLoading() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _loadingDialog("Loading dashboard..."),
+    );
+
+    await Future.wait([
+      _getResponderStatus(),
+      _loadRecentAlerts(),
+      _loadWeatherCardData(),
+    ]);
+
+    if (mounted) {
+      Navigator.pop(context);
+      setState(() => _isPageLoading = false);
+      await _maybeShowOnboardingTutorial();
+    }
   }
 
   Future<void> _initializeLocalNotifications() async {
@@ -121,6 +168,225 @@ class _HomePageState extends State<HomePage> {
             _unreadNotifCount = snapshot.docs.length;
           });
         });
+  }
+
+  Widget _loadingDialog(String msg) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Lottie.asset('assets/fireloading.json', width: 130, height: 130),
+          const SizedBox(height: 20),
+          Text(
+            msg,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFFB71C1C),
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _maybeShowOnboardingTutorial() async {
+    if (!mounted || _tutorialShownThisSession) return;
+    if (_selectedIndex != 0) return;
+
+    _tutorialShownThisSession = true;
+
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+
+    _showOnboardingTutorial();
+  }
+
+  void _showOnboardingTutorial() {
+    final targets = <TargetFocus>[
+      TargetFocus(
+        identify: "weather_card",
+        keyTarget: _weatherCardKey,
+        radius: 22,
+        contents: [
+          TargetContent(
+            align: ContentAlign.bottom,
+            child: _tutorialContent(
+              title: "Weather, Time, and Location",
+              description:
+                  "This card shows the current weather, temperature, date, live time, and your current location.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "responder_info",
+        keyTarget: _responderInfoKey,
+        radius: 22,
+        contents: [
+          TargetContent(
+            align: ContentAlign.bottom,
+            child: _tutorialContent(
+              title: "Responder Name and Team",
+              description:
+                  "This card shows your responder name and assigned team. Tap it to open team and truck information.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "availability",
+        keyTarget: _availabilityKey,
+        radius: 22,
+        contents: [
+          TargetContent(
+            align: ContentAlign.bottom,
+            child: _tutorialContent(
+              title: "Availability Status",
+              description:
+                  "This card shows whether you are available, unavailable, or dispatched. Tap it to change your status when allowed.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "dispatch_status",
+        keyTarget: _dispatchStatusKey,
+        radius: 22,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: _tutorialContent(
+              title: "Dispatch Status",
+              description:
+                  "This section shows the latest incident status, such as dispatched, validated, or confirmed, together with response details.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "nav_home",
+        keyTarget: _navHomeKey,
+        radius: 16,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: _tutorialContent(
+              title: "Home",
+              description: "Return to the dashboard here.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "nav_dispatch",
+        keyTarget: _navDispatchKey,
+        radius: 16,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: _tutorialContent(
+              title: "Dispatch",
+              description:
+                  "Open the dispatch page and responder activity here.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "nav_notifications",
+        keyTarget: _navNotificationsKey,
+        radius: 16,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: _tutorialContent(
+              title: "Notifications",
+              description:
+                  "Check your alerts, updates, and unread notices here.",
+            ),
+          ),
+        ],
+      ),
+      TargetFocus(
+        identify: "nav_settings",
+        keyTarget: _navSettingsKey,
+        radius: 16,
+        contents: [
+          TargetContent(
+            align: ContentAlign.top,
+            child: _tutorialContent(
+              title: "Settings",
+              description: "Manage your account and app settings here.",
+            ),
+          ),
+        ],
+      ),
+    ];
+
+    _tutorialCoachMark = TutorialCoachMark(
+      targets: targets,
+      colorShadow: Colors.black87,
+      opacityShadow: 0.78,
+      paddingFocus: 8,
+      textSkip: "Skip",
+      hideSkip: false,
+      onFinish: () {},
+      onSkip: () {
+        return true;
+      },
+    );
+
+    _tutorialCoachMark!.show(context: context);
+  }
+
+  Widget _tutorialContent({
+    required String title,
+    required String description,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFB71C1C),
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            description,
+            style: const TextStyle(
+              color: Colors.black87,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTimestamp(dynamic ts) {
+    if (ts is! Timestamp) return "";
+
+    final dt = ts.toDate();
+    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final period = dt.hour >= 12 ? "PM" : "AM";
+
+    return "${_monthName(dt.month)} ${dt.day}, ${dt.year} $hour:$minute $period";
   }
 
   Future<String?> _downloadAndSaveImage(
@@ -541,16 +807,17 @@ class _HomePageState extends State<HomePage> {
         final address = data["userAddress"] ?? "";
         final alertType = data["type"] ?? data["alertType"] ?? "Unknown";
 
-        String dispatchTimestampText = "";
-        final ts = data["timestamp"];
-        if (ts is Timestamp) {
-          final dt = ts.toDate();
-          final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-          final minute = dt.minute.toString().padLeft(2, '0');
-          final period = dt.hour >= 12 ? "PM" : "AM";
-          dispatchTimestampText =
-              "${_monthName(dt.month)} ${dt.day}, ${dt.year} $hour:$minute $period";
-        }
+        final String dispatchTimestampText = _formatTimestamp(
+          data["dispatchedAt"] ?? data["timestamp"],
+        );
+
+        final String validatedTimestampText = _formatTimestamp(
+          data["validatedAt"],
+        );
+
+        final String confirmedTimestampText = _formatTimestamp(
+          data["confirmedAt"],
+        );
 
         final bool leader = await _resolveLeaderForDispatch(docSnap.id, data);
 
@@ -563,6 +830,8 @@ class _HomePageState extends State<HomePage> {
           _isTeamLeader = leader;
           _currentAlertType = alertType.toString();
           _currentDispatchTimestampText = dispatchTimestampText;
+          _currentValidatedTimestampText = validatedTimestampText;
+          _currentConfirmedTimestampText = confirmedTimestampText;
         });
 
         if (status == "Dispatched") {
@@ -720,12 +989,21 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _refreshDashboard() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _loadingDialog("Refreshing data..."),
+    );
+
     await Future.wait([
       _getResponderStatus(),
       _loadRecentAlerts(),
       _loadWeatherCardData(),
     ]);
+
     _listenToDispatchStatus();
+
+    if (mounted) Navigator.pop(context);
   }
 
   Future<void> _loadTeamTruckInfo() async {
@@ -1481,6 +1759,10 @@ class _HomePageState extends State<HomePage> {
         selectedIndex: _selectedIndex,
         onItemTapped: _onItemTapped,
         notifCount: _unreadNotifCount,
+        homeKey: _navHomeKey,
+        dispatchKey: _navDispatchKey,
+        notificationsKey: _navNotificationsKey,
+        settingsKey: _navSettingsKey,
       ),
     );
   }
@@ -1502,81 +1784,31 @@ class _HomePageState extends State<HomePage> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            _buildTimeCard(),
-            const SizedBox(height: 16),
-            _buildDispatchStatusCard(),
+            Container(key: _weatherCardKey, child: _buildTimeCard()),
             const SizedBox(height: 16),
             Row(
               children: [
-                Expanded(child: _buildResponderInfoCard()),
+                Expanded(
+                  child: Container(
+                    key: _responderInfoKey,
+                    child: _buildResponderInfoCard(),
+                  ),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: _buildStatusCard()),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  "Recent Fire Incidents",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _selectedIndex = 1;
-                    });
-                  },
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFFB71C1C),
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(0, 0),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text(
-                    "View all",
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                Expanded(
+                  child: Container(
+                    key: _availabilityKey,
+                    child: _buildStatusCard(),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            if (_recentAlerts.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  vertical: 26,
-                  horizontal: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE5E5EA),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: const Text(
-                  "No recent fire incidents yet.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF636366),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              )
-            else
-              Column(
-                children: _recentAlerts.map((alert) {
-                  return _recentIncidentCard(alert);
-                }).toList(),
-              ),
-            const SizedBox(height: 30),
+            const SizedBox(height: 16),
+            Container(
+              key: _dispatchStatusKey,
+              child: _buildDispatchStatusCard(),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -1930,80 +2162,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _recentIncidentCard(Map<String, dynamic> alert) {
-    final address =
-        alert['userAddress'] ??
-        alert['alertLocation'] ??
-        alert['location'] ??
-        "Unknown Address";
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE5E5EA),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: const Color(0xFFD1D1D6),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(
-              Icons.local_fire_department,
-              color: Color(0xFFB71C1C),
-              size: 26,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              address,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF1C1C1E),
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                height: 1.35,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          ElevatedButton(
-            onPressed: () {
-              _openAlertViewModal(alert);
-            },
-            style: ElevatedButton.styleFrom(
-              elevation: 0,
-              backgroundColor: const Color(0xFFD1D1D6),
-              foregroundColor: const Color(0xFFB71C1C),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text(
-              "View",
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _stopAlarm() {
     try {
       _player.stop();
@@ -2313,12 +2471,7 @@ class _HomePageState extends State<HomePage> {
               SafeArea(
                 top: false,
                 child: Container(
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    14,
-                    20,
-                    8, 
-                  ),
+                  padding: EdgeInsets.fromLTRB(20, 14, 20, 8),
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.vertical(
@@ -2391,196 +2544,307 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildDispatchStatusCard() {
-    Color startColor, endColor;
-    IconData icon;
-
-    if (_dispatchStatus == "Dispatched") {
-      startColor = const Color(0xFFFF4B3E);
-      endColor = const Color(0xFFFFA000);
-      icon = Icons.local_fire_department;
-    } else if (_dispatchStatus == "Validated") {
-      startColor = const Color(0xFF2E7D32);
-      endColor = const Color(0xFF66BB6A);
-      icon = Icons.verified_rounded;
-    } else {
-      startColor = Colors.grey;
-      endColor = Colors.blueGrey;
-      icon = Icons.lock_outline;
-    }
-
+    final bool isDispatched = _dispatchStatus == "Dispatched";
+    final bool isValidated = _dispatchStatus == "Validated";
+    final bool isAdminConfirmed = _dispatchStatus == "Confirmed";
     final bool noActiveDispatch = _dispatchStatus == "No Active Dispatch";
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [startColor, endColor],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    Color topColor;
+    Color bottomColor;
+    IconData statusIcon;
+    String title;
+    String subtitle;
+
+    if (isDispatched) {
+      topColor = const Color(0xFFFF8F00);
+      bottomColor = const Color(0xFFFF6F00);
+      statusIcon = Icons.local_fire_department_rounded;
+      title = "Active Dispatch";
+      subtitle = "Immediate response required";
+    } else if (isAdminConfirmed) {
+      topColor = const Color(0xFF1565C0);
+      bottomColor = const Color(0xFF1E88E5);
+      statusIcon = Icons.verified_user_rounded;
+      title = "Confirmed";
+      subtitle = "Incident officially confirmed";
+    } else if (isValidated) {
+      topColor = const Color(0xFF2E7D32);
+      bottomColor = const Color(0xFF43A047);
+      statusIcon = Icons.verified_rounded;
+      title = "Incident Validated";
+      subtitle = "Dispatch completed successfully";
+    } else {
+      topColor = const Color(0xFF607D8B);
+      bottomColor = const Color(0xFF90A4AE);
+      statusIcon = Icons.shield_outlined;
+      title = "No Active Dispatch";
+      subtitle = "Waiting for incoming incident";
+    }
+
+    Widget detailTile({
+      required IconData icon,
+      required String label,
+      required String value,
+    }) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withOpacity(0.08)),
         ),
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: endColor.withOpacity(0.22),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: noActiveDispatch
-            ? CrossAxisAlignment.center
-            : CrossAxisAlignment.start,
-        children: [
-          if (noActiveDispatch)
-            Center(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: Colors.white, size: 19),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 58,
-                    height: 58,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.18),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(icon, color: Colors.white, size: 32),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    "No Active Dispatch",
-                    textAlign: TextAlign.center,
+                  Text(
+                    label,
                     style: TextStyle(
+                      color: Colors.white.withOpacity(0.78),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.7,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    value,
+                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      height: 1.15,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
                     ),
                   ),
                 ],
               ),
-            )
-          else ...[
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 58,
-                  height: 58,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, color: Colors.white, size: 32),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [topColor, bottomColor],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: bottomColor.withOpacity(0.20),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 62,
+                height: 62,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(0.10)),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
+                child: Icon(statusIcon, color: Colors.white, size: 30),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          _dispatchStatus.toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.9,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Text(
-                        _dispatchStatus == "Dispatched"
-                            ? "Team $_teamName is dispatched"
-                            : _dispatchStatus,
+                        title,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          height: 1.15,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          height: 1.05,
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      if (_dispatchStatus == "Dispatched") ...[
-                        Text(
-                          "Type: ${_currentAlertType ?? 'Unknown'}",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.95),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      const SizedBox(height: 6),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.88),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          height: 1.35,
                         ),
-                        const SizedBox(height: 4),
-                      ],
-                      if (_callerAddress.isNotEmpty) ...[
-                        Text(
-                          "Address: $_callerAddress",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.95),
-                            fontSize: 14,
-                            height: 1.35,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                      if (_currentDispatchTimestampText.isNotEmpty)
-                        Text(
-                          "DispatchTime: $_currentDispatchTimestampText",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.95),
-                            fontSize: 14,
-                          ),
-                        ),
+                      ),
                     ],
-                  ),
-                ),
-              ],
-            ),
-            if (_dispatchStatus == "Dispatched") ...[
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: SizedBox(
-                  height: 46,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      _stopAlarm();
-                      _openAlertDetails();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      elevation: 0,
-                      backgroundColor: Colors.white.withOpacity(0.18),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                    icon: const Icon(Icons.visibility_rounded, size: 18),
-                    label: const Text(
-                      "View",
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                child: SizedBox(
-                  height: 46,
-                  child: ElevatedButton.icon(
-                    onPressed: _openValidationFormPage,
-                    style: ElevatedButton.styleFrom(
-                      elevation: 0,
-                      backgroundColor: const Color(0xFF2E7D32),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                    icon: const Icon(Icons.verified_rounded, size: 18),
-                    label: const Text(
-                      "Validate",
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                   ),
                 ),
               ),
             ],
+          ),
+
+          const SizedBox(height: 20),
+
+          Container(
+            width: double.infinity,
+            height: 1,
+            color: Colors.white.withOpacity(0.12),
+          ),
+
+          const SizedBox(height: 20),
+
+          if (isDispatched) ...[
+            detailTile(
+              icon: Icons.groups_rounded,
+              label: "RESPONDING TEAM",
+              value: "Team $_teamName",
+            ),
+            if (_currentDispatchTimestampText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.access_time_rounded,
+                label: "DISPATCH TIME",
+                value: _currentDispatchTimestampText,
+              ),
+            ],
+
+            const SizedBox(height: 22),
+
+            Center(
+              child: SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    _stopAlarm();
+                    _openAlertDetails();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    elevation: 0,
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF8E1F1F),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                  icon: const Icon(Icons.visibility_rounded, size: 20),
+                  label: const Text(
+                    "View Details",
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            // your validate button here
+          ] else if (isValidated) ...[
+            detailTile(
+              icon: Icons.groups_rounded,
+              label: "RESPONDING TEAM",
+              value: "Team $_teamName",
+            ),
+            if (_currentValidatedTimestampText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.verified_rounded,
+                label: "VALIDATED TIME",
+                value: _currentValidatedTimestampText,
+              ),
+            ],
+            if (_currentAlertType != null &&
+                _currentAlertType!.trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.warning_amber_rounded,
+                label: "INCIDENT TYPE",
+                value: _currentAlertType!,
+              ),
+            ],
+            if (_callerAddress.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.location_on_rounded,
+                label: "ADDRESS",
+                value: _callerAddress,
+              ),
+            ],
+          ] else if (isAdminConfirmed) ...[
+            detailTile(
+              icon: Icons.groups_rounded,
+              label: "RESPONDING TEAM",
+              value: "Team $_teamName",
+            ),
+            if (_currentConfirmedTimestampText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.verified_user_rounded,
+                label: "CONFIRMED TIME",
+                value: _currentConfirmedTimestampText,
+              ),
+            ],
+            if (_currentAlertType != null &&
+                _currentAlertType!.trim().isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.warning_amber_rounded,
+                label: "INCIDENT TYPE",
+                value: _currentAlertType!,
+              ),
+            ],
+            if (_callerAddress.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.location_on_rounded,
+                label: "ADDRESS",
+                value: _callerAddress,
+              ),
+            ],
+          ] else if (noActiveDispatch) ...[
+            // your no active dispatch container
           ],
         ],
       ),
@@ -3614,6 +3878,27 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _sectionCard(
+                  child: _buildCheckItem(
+                    label: "Skip detailed form, already radioed",
+                    value: _skippedBecauseRadioed,
+                    onChanged: (checked) {
+                      setState(() {
+                        _skippedBecauseRadioed = checked ?? false;
+
+                        if (_skippedBecauseRadioed) {
+                          _selectedFireTypes.clear();
+                          _selectedResources.clear();
+                          _sourceController.clear();
+                          _remarksController.clear();
+                          _injuredOrTrapped = false;
+                          _actualFireImageBase64 = null;
+                        }
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _sectionCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -3816,27 +4101,6 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                         ),
                       ),
                     ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _sectionCard(
-                  child: _buildCheckItem(
-                    label: "Skip detailed form, already radioed",
-                    value: _skippedBecauseRadioed,
-                    onChanged: (checked) {
-                      setState(() {
-                        _skippedBecauseRadioed = checked ?? false;
-
-                        if (_skippedBecauseRadioed) {
-                          _selectedFireTypes.clear();
-                          _selectedResources.clear();
-                          _sourceController.clear();
-                          _remarksController.clear();
-                          _injuredOrTrapped = false;
-                          _actualFireImageBase64 = null;
-                        }
-                      });
-                    },
                   ),
                 ),
                 const SizedBox(height: 18),

@@ -3,15 +3,39 @@ import 'package:flutter/material.dart';
 class CustomBottomNavBar extends StatelessWidget {
   final int selectedIndex;
   final Function(int) onItemTapped;
+  final int notifCount;
 
-  final int notifCount; // 🔥 UNREAD NOTIF COUNTER
+  final GlobalKey? homeKey;
+  final GlobalKey? dispatchKey;
+  final GlobalKey? notificationsKey;
+  final GlobalKey? settingsKey;
 
   const CustomBottomNavBar({
     super.key,
     required this.selectedIndex,
     required this.onItemTapped,
     required this.notifCount,
+    this.homeKey,
+    this.dispatchKey,
+    this.notificationsKey,
+    this.settingsKey,
   });
+
+  Widget _navIcon({
+    required GlobalKey? keyTarget,
+    required Widget icon,
+  }) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Center(
+        child: Container(
+          key: keyTarget,
+          child: icon,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,63 +44,79 @@ class CustomBottomNavBar extends StatelessWidget {
       currentIndex: selectedIndex,
       onTap: onItemTapped,
       backgroundColor: Colors.white,
-      selectedItemColor: const Color(0xFFA30000), // Active red
+      selectedItemColor: const Color(0xFFA30000),
       unselectedItemColor: Colors.grey,
-      elevation: 12,
+      elevation: 8,
       items: [
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.home_outlined),
-          activeIcon: Icon(Icons.home),
+        BottomNavigationBarItem(
+          icon: _navIcon(
+            keyTarget: homeKey,
+            icon: const Icon(Icons.home_outlined),
+          ),
+          activeIcon: const Icon(Icons.home),
           label: "Home",
         ),
 
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.local_fire_department_outlined),
-          activeIcon: Icon(Icons.local_fire_department),
+        BottomNavigationBarItem(
+          icon: _navIcon(
+            keyTarget: dispatchKey,
+            icon: const Icon(Icons.local_fire_department_outlined),
+          ),
+          activeIcon: const Icon(Icons.local_fire_department),
           label: "Dispatch",
         ),
 
-        // 🔥 NOTIFICATION WITH BADGE
         BottomNavigationBarItem(
-          icon: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              const Icon(Icons.notifications_none),
+          icon: SizedBox(
+            width: 28,
+            height: 28,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  key: notificationsKey,
+                  child: const Icon(Icons.notifications_none),
+                ),
 
-              if (notifCount > 0)
-                Positioned(
-                  right: -6,
-                  top: -2,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFA30000),
-                      shape: BoxShape.circle,
-                    ),
-                    constraints: const BoxConstraints(
-                      minWidth: 20,
-                      minHeight: 20,
-                    ),
-                    child: Text(
-                      notifCount > 9 ? "9+" : notifCount.toString(),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
+                if (notifCount > 0)
+                  Positioned(
+                    right: -6,
+                    top: -4,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFA30000),
+                        shape: BoxShape.circle,
                       ),
-                      textAlign: TextAlign.center,
+                      constraints: const BoxConstraints(
+                        minWidth: 18,
+                        minHeight: 18,
+                      ),
+                      child: Text(
+                        notifCount > 9 ? "9+" : notifCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
           activeIcon: const Icon(Icons.notifications),
           label: "Notifications",
         ),
 
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.settings_outlined),
-          activeIcon: Icon(Icons.settings),
+        BottomNavigationBarItem(
+          icon: _navIcon(
+            keyTarget: settingsKey,
+            icon: const Icon(Icons.settings_outlined),
+          ),
+          activeIcon: const Icon(Icons.settings),
           label: "Settings",
         ),
       ],

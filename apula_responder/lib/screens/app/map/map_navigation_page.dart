@@ -59,8 +59,11 @@ class _MapNavigationPageState extends State<MapNavigationPage>
   bool _isReRouting = false;
   bool _arrivalShown = false;
   bool _isAutoCameraMoving = false;
+  bool _drivingMode = false;
 
   double _currentBearing = 0.0;
+  double _currentSpeedKph = 0.0;
+  double _gpsAccuracyMeters = 0.0;
 
   BitmapDescriptor? _stationIcon;
   BitmapDescriptor? _alertIcon;
@@ -68,6 +71,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
   LatLng? _currentTruckLatLng;
   LatLng? _previousTruckLatLng;
   StreamSubscription<Position>? _positionStream;
+  StreamSubscription<ServiceStatus>? _serviceStatusStream;
 
   DateTime? _lastRouteRefreshAt;
 
@@ -75,68 +79,217 @@ class _MapNavigationPageState extends State<MapNavigationPage>
   void initState() {
     super.initState();
     _initializeMap();
+    _listenLocationServiceChanges();
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
+    _serviceStatusStream?.cancel();
     super.dispose();
+  }
+
+  void _listenLocationServiceChanges() {
+    _serviceStatusStream =
+        Geolocator.getServiceStatusStream().listen((ServiceStatus status) async {
+      if (status == ServiceStatus.enabled && !_tripStarted) {
+        final latLng = await _getBestCurrentLatLng();
+        if (latLng != null) {
+          _currentTruckLatLng = latLng;
+          _refreshMarkers();
+
+          await _controller?.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(
+                target: latLng,
+                zoom: 17,
+              ),
+            ),
+          );
+
+          await _loadRoute(
+            originLat: latLng.latitude,
+            originLng: latLng.longitude,
+            force: true,
+          );
+        }
+      }
+    });
   }
 
   Future<void> _initializeMap() async {
     await _loadIcons();
     await Future.delayed(const Duration(milliseconds: 300));
 
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      var permission = await Geolocator.checkPermission();
+    final LatLng? realLocation = await _getBestCurrentLatLng();
 
-      if (serviceEnabled &&
-          (permission == LocationPermission.always ||
-              permission == LocationPermission.whileInUse)) {
-        final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
+    if (realLocation != null) {
+      _currentTruckLatLng = realLocation;
+      _refreshMarkers();
 
-        _currentTruckLatLng = LatLng(pos.latitude, pos.longitude);
-        _refreshMarkers(liveOrigin: _currentTruckLatLng);
+      await _loadRoute(
+        originLat: realLocation.latitude,
+        originLng: realLocation.longitude,
+        force: true,
+      );
 
-        await _loadRoute(
-          originLat: pos.latitude,
-          originLng: pos.longitude,
-          force: true,
-        );
-        return;
+      await Future.delayed(const Duration(milliseconds: 250));
+      await _controller?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: realLocation,
+            zoom: 17,
+          ),
+        ),
+      );
+
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
       }
+      return;
+    }
 
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-
-        if (serviceEnabled &&
-            (permission == LocationPermission.always ||
-                permission == LocationPermission.whileInUse)) {
-          final pos = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.high,
-          );
-
-          _currentTruckLatLng = LatLng(pos.latitude, pos.longitude);
-          _refreshMarkers(liveOrigin: _currentTruckLatLng);
-
-          await _loadRoute(
-            originLat: pos.latitude,
-            originLng: pos.longitude,
-            force: true,
-          );
-          return;
-        }
-      }
-    } catch (_) {}
+    _refreshMarkers();
 
     await _loadRoute(
       originLat: widget.stationLat,
       originLng: widget.stationLng,
       force: true,
     );
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<LatLng?> _getBestCurrentLatLng() async {
+    try {
+      final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+
+      LocationPermission permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+
+      Position? best;
+
+      try {
+        final current = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.bestForNavigation,
+          timeLimit: const Duration(seconds: 12),
+        );
+        best = current;
+      } catch (_) {}
+
+      try {
+        final refined = await _waitForVeryAccuratePosition(
+          targetAccuracyMeters: 12,
+          timeout: const Duration(seconds: 20),
+        );
+        best = _pickBetterPosition(best, refined);
+      } catch (_) {}
+
+      if (best == null) return null;
+
+      if (best.accuracy <= 0 || best.accuracy > 35) {
+        return null;
+      }
+
+      return LatLng(best.latitude, best.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Position> _waitForVeryAccuratePosition({
+    required double targetAccuracyMeters,
+    required Duration timeout,
+  }) async {
+    final completer = Completer<Position>();
+    StreamSubscription<Position>? sub;
+    Timer? timer;
+    Position? bestSeen;
+
+    timer = Timer(timeout, () async {
+      await sub?.cancel();
+      if (!completer.isCompleted) {
+        if (bestSeen != null) {
+          completer.complete(bestSeen!);
+        } else {
+          completer.completeError(
+            TimeoutException("No accurate GPS position received."),
+          );
+        }
+      }
+    });
+
+    sub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+      ),
+    ).listen(
+      (Position position) async {
+        if (position.latitude == 0 && position.longitude == 0) {
+          return;
+        }
+
+        bestSeen = _pickBetterPosition(bestSeen, position);
+
+        final double accuracy = position.accuracy;
+        if (accuracy > 0 && accuracy <= targetAccuracyMeters) {
+          await sub?.cancel();
+          timer?.cancel();
+          if (!completer.isCompleted) {
+            completer.complete(position);
+          }
+        }
+      },
+      onError: (error) async {
+        await sub?.cancel();
+        timer?.cancel();
+        if (!completer.isCompleted) {
+          if (bestSeen != null) {
+            completer.complete(bestSeen!);
+          } else {
+            completer.completeError(error);
+          }
+        }
+      },
+    );
+
+    return completer.future;
+  }
+
+  Position _pickBetterPosition(Position? a, Position b) {
+    if (a == null) return b;
+
+    final bool bHasAccuracy = b.accuracy > 0;
+    final bool aHasAccuracy = a.accuracy > 0;
+
+    if (bHasAccuracy && !aHasAccuracy) return b;
+    if (!bHasAccuracy && aHasAccuracy) return a;
+
+    if (bHasAccuracy && aHasAccuracy) {
+      if (b.accuracy < a.accuracy) return b;
+      if (a.accuracy < b.accuracy) return a;
+    }
+
+    final aTime = a.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bTime = b.timestamp ?? DateTime.now();
+
+    return bTime.isAfter(aTime) ? b : a;
   }
 
   Future<void> _loadIcons() async {
@@ -219,7 +372,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
     final LatLng frontTarget = _pointAhead(
       truckLatLng,
       _currentBearing,
-      28,
+      _drivingMode ? 36 : 28,
     );
 
     _isAutoCameraMoving = true;
@@ -227,10 +380,10 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       await _controller!.animateCamera(
         CameraUpdate.newCameraPosition(
           CameraPosition(
-            target: frontTarget,
-            zoom: 17.4,
-            bearing: _currentBearing,
-            tilt: 58,
+            target: _drivingMode ? frontTarget : truckLatLng,
+            zoom: _drivingMode ? 18.2 : 17.4,
+            bearing: _drivingMode ? _currentBearing : 0,
+            tilt: _drivingMode ? 68 : 58,
           ),
         ),
       );
@@ -337,7 +490,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
             width: 6,
             zIndex: 1,
             geodesic: true,
-            visible: true,
+            visible: !_drivingMode,
             points: coords,
           ),
         );
@@ -376,7 +529,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
         Polyline(
           polylineId: const PolylineId("best_route"),
           color: const Color(0xFF1E5BFF),
-          width: 7,
+          width: _drivingMode ? 9 : 7,
           zIndex: 2,
           geodesic: true,
           visible: true,
@@ -386,11 +539,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
 
       _polylines = newPolylines;
 
-      _refreshMarkers(
-        liveOrigin: _tripStarted && _currentTruckLatLng != null
-            ? _currentTruckLatLng
-            : null,
-      );
+      _refreshMarkers();
 
       setState(() => _isLoading = false);
 
@@ -410,7 +559,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
     }
   }
 
-  void _refreshMarkers({LatLng? liveOrigin}) {
+  void _refreshMarkers() {
     final Set<Marker> updatedMarkers = {
       Marker(
         markerId: const MarkerId("alert"),
@@ -425,10 +574,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       ),
     };
 
-    // Before trip starts, show station marker.
-    // During trip, hide the extra truck marker so the real Google Maps
-    // location layer and accuracy circle are the visible live position.
-    if (!_tripStarted) {
+    if (!_tripStarted && !_drivingMode) {
       updatedMarkers.add(
         Marker(
           markerId: const MarkerId("station"),
@@ -456,6 +602,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       _arrivalShown = false;
       _followTruck = true;
       _isLoading = true;
+      _drivingMode = true;
     });
 
     try {
@@ -495,36 +642,46 @@ class _MapNavigationPageState extends State<MapNavigationPage>
         return;
       }
 
-      final currentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.bestForNavigation,
-      );
+      final LatLng? realLatLng = await _getBestCurrentLatLng();
 
-      final realLatLng = LatLng(
-        currentPosition.latitude,
-        currentPosition.longitude,
-      );
+      if (realLatLng == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "Unable to get accurate GPS location. Go outside or enable precise location.",
+            ),
+          ),
+        );
+        setState(() {
+          _isStartingTrip = false;
+          _isLoading = false;
+        });
+        return;
+      }
 
       _currentTruckLatLng = realLatLng;
       _previousTruckLatLng = realLatLng;
       _tripStarted = true;
       _currentBearing = 0.0;
+      _currentSpeedKph = 0.0;
 
-      _refreshMarkers(liveOrigin: realLatLng);
+      _refreshMarkers();
 
       await _controller?.animateCamera(
         CameraUpdate.newCameraPosition(
           CameraPosition(
             target: realLatLng,
-            zoom: 17.5,
+            zoom: 18.2,
             bearing: 0,
-            tilt: 55,
+            tilt: 68,
           ),
         ),
       );
 
       await _loadRoute(
-        originLat: currentPosition.latitude,
-        originLng: currentPosition.longitude,
+        originLat: realLatLng.latitude,
+        originLng: realLatLng.longitude,
         force: true,
       );
 
@@ -538,6 +695,9 @@ class _MapNavigationPageState extends State<MapNavigationPage>
               distanceFilter: 1,
             ),
           ).listen((Position position) async {
+            if (position.latitude == 0 && position.longitude == 0) return;
+            if (position.accuracy > 0 && position.accuracy > 35) return;
+
             final newLatLng = LatLng(position.latitude, position.longitude);
 
             if (_previousTruckLatLng != null) {
@@ -556,8 +716,13 @@ class _MapNavigationPageState extends State<MapNavigationPage>
 
             _previousTruckLatLng = newLatLng;
             _currentTruckLatLng = newLatLng;
+            _gpsAccuracyMeters = position.accuracy;
+            _currentSpeedKph =
+                position.speed > 0 ? position.speed * 3.6 : 0.0;
 
-            _refreshMarkers(liveOrigin: newLatLng);
+            if (mounted) {
+              setState(() {});
+            }
 
             if (_followTruck) {
               await _animateFrontDrivingCamera(newLatLng);
@@ -585,7 +750,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Trip started from your current location.")),
+        const SnackBar(content: Text("Driving mode started.")),
       );
     } catch (e) {
       if (!mounted) return;
@@ -617,6 +782,9 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       _remainingDistance = "";
       _remainingDuration = "";
       _arrivalShown = false;
+      _currentSpeedKph = 0.0;
+      _gpsAccuracyMeters = 0.0;
+      _drivingMode = false;
     });
 
     _refreshMarkers();
@@ -731,65 +899,108 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       right: 12,
       child: SafeArea(
         bottom: false,
-        child: Align(
-          alignment: Alignment.topLeft,
-          child: Material(
-            color: const Color(0xFF1E5BFF),
-            elevation: 8,
-            borderRadius: BorderRadius.circular(18),
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 58),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E5BFF),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
+        child: Material(
+          color: const Color(0xFF1E5BFF),
+          elevation: 10,
+          borderRadius: BorderRadius.circular(22),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E5BFF),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
                     Icons.turn_right_rounded,
                     color: Colors.white,
-                    size: 24,
+                    size: 28,
                   ),
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _nextInstruction.isEmpty
-                              ? "Continue straight"
-                              : _nextInstruction,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            height: 1.1,
-                          ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _nextInstruction.isEmpty
+                            ? "Continue straight"
+                            : _nextInstruction,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _remainingDistance.isEmpty
-                              ? "Navigating"
-                              : _remainingDistance,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _smallStatChip(
+                            icon: Icons.route_rounded,
+                            text: _remainingDistance.isEmpty
+                                ? "Navigating"
+                                : _remainingDistance,
                           ),
-                        ),
-                      ],
-                    ),
+                          _smallStatChip(
+                            icon: Icons.schedule_rounded,
+                            text: _remainingDuration.isEmpty
+                                ? "--"
+                                : _remainingDuration,
+                          ),
+                          _smallStatChip(
+                            icon: Icons.speed_rounded,
+                            text: "${_currentSpeedKph.round()} km/h",
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _smallStatChip({
+    required IconData icon,
+    required String text,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -799,25 +1010,57 @@ class _MapNavigationPageState extends State<MapNavigationPage>
 
     return Positioned(
       right: 14,
-      bottom: 120,
-      child: FloatingActionButton(
-        heroTag: "follow_btn",
-        mini: true,
-        backgroundColor: Colors.white,
-        elevation: 6,
-        onPressed: () async {
-          setState(() {
-            _followTruck = true;
-          });
+      bottom: 180,
+      child: Column(
+        children: [
+          FloatingActionButton(
+            heroTag: "follow_btn",
+            mini: true,
+            backgroundColor: Colors.white,
+            elevation: 6,
+            onPressed: () async {
+              setState(() {
+                _followTruck = true;
+              });
 
-          if (_currentTruckLatLng != null) {
-            await _animateFrontDrivingCamera(_currentTruckLatLng!);
-          }
-        },
-        child: const Icon(
-          Icons.navigation,
-          color: Color(0xFF1E5BFF),
-        ),
+              if (_currentTruckLatLng != null) {
+                await _animateFrontDrivingCamera(_currentTruckLatLng!);
+              }
+            },
+            child: Icon(
+              _followTruck ? Icons.my_location : Icons.navigation,
+              color: const Color(0xFF1E5BFF),
+            ),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton(
+            heroTag: "drive_mode_btn",
+            mini: true,
+            backgroundColor: _drivingMode
+                ? const Color(0xFF1E5BFF)
+                : Colors.white,
+            elevation: 6,
+            onPressed: () async {
+              setState(() {
+                _drivingMode = !_drivingMode;
+              });
+
+              if (_currentTruckLatLng != null) {
+                await _animateFrontDrivingCamera(_currentTruckLatLng!);
+              }
+
+              await _loadRoute(
+                originLat: (_currentTruckLatLng?.latitude ?? widget.stationLat),
+                originLng: (_currentTruckLatLng?.longitude ?? widget.stationLng),
+                force: true,
+              );
+            },
+            child: Icon(
+              Icons.directions_car_rounded,
+              color: _drivingMode ? Colors.white : const Color(0xFF1E5BFF),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -829,72 +1072,150 @@ class _MapNavigationPageState extends State<MapNavigationPage>
       bottom: 18,
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: (_tripStarted || _isStartingTrip) ? null : _startTrip,
-                icon: _isStartingTrip
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(
-                        Icons.play_arrow_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                label: Text(
-                  _isStartingTrip
-                      ? "Starting..."
-                      : _tripStarted
-                          ? "Trip Started"
-                          : "Start Trip",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
+            if (_tripStarted && _drivingMode)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2E7D32),
-                  disabledBackgroundColor: const Color(0xFF2E7D32),
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  elevation: 5,
-                ),
-              ),
-            ),
-            if (_tripStarted) ...[
-              const SizedBox(width: 10),
-              ElevatedButton(
-                onPressed: _stopTrip,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFA30000),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 13,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  elevation: 5,
-                ),
-                child: const Icon(
-                  Icons.stop_rounded,
+                decoration: BoxDecoration(
                   color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.10),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _bottomDriveInfo(
+                        label: "ETA",
+                        value: _remainingDuration.isEmpty ? "--" : _remainingDuration,
+                      ),
+                    ),
+                    Expanded(
+                      child: _bottomDriveInfo(
+                        label: "DISTANCE",
+                        value: _remainingDistance.isEmpty ? "--" : _remainingDistance,
+                      ),
+                    ),
+                    Expanded(
+                      child: _bottomDriveInfo(
+                        label: "GPS",
+                        value: _gpsAccuracyMeters > 0
+                            ? "${_gpsAccuracyMeters.round()} m"
+                            : "--",
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: (_tripStarted || _isStartingTrip) ? null : _startTrip,
+                    icon: _isStartingTrip
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                    label: Text(
+                      _isStartingTrip
+                          ? "Starting..."
+                          : _tripStarted
+                              ? "Driving Mode Active"
+                              : "Start Trip",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2E7D32),
+                      disabledBackgroundColor: const Color(0xFF2E7D32),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      elevation: 5,
+                    ),
+                  ),
+                ),
+                if (_tripStarted) ...[
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    onPressed: _stopTrip,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFA30000),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 13,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      elevation: 5,
+                    ),
+                    child: const Icon(
+                      Icons.stop_rounded,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _bottomDriveInfo({
+    required String label,
+    required String value,
+  }) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.black54,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.black87,
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
     );
   }
 
@@ -990,7 +1311,7 @@ class _MapNavigationPageState extends State<MapNavigationPage>
                         _infoRow(
                           Icons.location_on_outlined,
                           "Origin Address",
-                          _tripStarted && _currentTruckLatLng != null
+                          _currentTruckLatLng != null
                               ? "Current device location"
                               : widget.stationAddress,
                         ),
@@ -1051,9 +1372,9 @@ class _MapNavigationPageState extends State<MapNavigationPage>
             ),
             onPressed: () => Navigator.pop(context),
           ),
-          title: const Text(
-            "Navigation Route",
-            style: TextStyle(
+          title: Text(
+            _drivingMode ? "Driving Mode" : "Navigation Route",
+            style: const TextStyle(
               color: Color(0xFFA30000),
               fontWeight: FontWeight.bold,
               fontSize: 19,
@@ -1069,7 +1390,22 @@ class _MapNavigationPageState extends State<MapNavigationPage>
                 initialCameraPosition: initialPosition,
                 markers: _markers,
                 polylines: _polylines,
-                onMapCreated: (c) => _controller = c,
+                onMapCreated: (c) async {
+                  _controller = c;
+
+                  final LatLng target =
+                      _currentTruckLatLng ??
+                      LatLng(widget.stationLat, widget.stationLng);
+
+                  await _controller?.animateCamera(
+                    CameraUpdate.newCameraPosition(
+                      CameraPosition(
+                        target: target,
+                        zoom: _currentTruckLatLng != null ? 17 : 14,
+                      ),
+                    ),
+                  );
+                },
                 onCameraMoveStarted: () {
                   if (_tripStarted && !_isAutoCameraMoving) {
                     setState(() {
@@ -1078,14 +1414,14 @@ class _MapNavigationPageState extends State<MapNavigationPage>
                   }
                 },
                 myLocationEnabled: true,
-                myLocationButtonEnabled: false,
+                myLocationButtonEnabled: true,
                 mapType: MapType.normal,
                 zoomControlsEnabled: false,
                 compassEnabled: false,
                 tiltGesturesEnabled: true,
                 rotateGesturesEnabled: true,
                 buildingsEnabled: true,
-                trafficEnabled: false,
+                trafficEnabled: true,
                 indoorViewEnabled: false,
               ),
             ),

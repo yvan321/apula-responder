@@ -20,6 +20,9 @@ dependencies:
   audioplayers: ^6.0.0
   image_picker: ^1.1.2
 
+  # Onboarding and user guidance
+  tutorial_coach_mark: ^1.2.11
+
   # Firebase
   firebase_core: ^4.2.0
   firebase_auth: ^6.1.1
