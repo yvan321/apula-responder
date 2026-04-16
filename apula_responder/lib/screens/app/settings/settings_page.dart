@@ -263,7 +263,7 @@ class _SettingsPageState extends State<SettingsPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
               child: Text(
-                "Responder Settings",
+                "Settings",
                 style: TextStyle(
                   color: redColor,
                   fontSize: 30,

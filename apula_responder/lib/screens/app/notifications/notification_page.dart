@@ -385,7 +385,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (selected)
-            const Icon(Icons.check, size: 18, color: Color(0xFFB71C1C)),
+            const Icon(Icons.filter_alt, size: 18, color: Color(0xFFB71C1C)),
           if (selected) const SizedBox(width: 6),
           Text(label),
         ],

@@ -1064,6 +1064,7 @@ class _HomePageState extends State<HomePage> {
       final leaderId = (teamData['leaderId'] ?? '').toString().trim();
 
       String? foundLeaderName;
+      final Set<String> uniqueMembers = {};
       final List<String> members = [];
 
       if (teamMembersRaw is List) {
@@ -1072,7 +1073,8 @@ class _HomePageState extends State<HomePage> {
             final name = (item['name'] ?? 'Unknown').toString().trim();
             final memberId = (item['id'] ?? '').toString().trim();
 
-            if (name.isNotEmpty) {
+            if (name.isNotEmpty && !uniqueMembers.contains(name)) {
+              uniqueMembers.add(name);
               members.add(name);
             }
 
@@ -2556,20 +2558,20 @@ class _HomePageState extends State<HomePage> {
     String subtitle;
 
     if (isDispatched) {
-      topColor = const Color(0xFFFF8F00);
-      bottomColor = const Color(0xFFFF6F00);
+      topColor = const Color(0xFFBF360C);
+      bottomColor = const Color(0xFFFFA000);
       statusIcon = Icons.local_fire_department_rounded;
       title = "Active Dispatch";
       subtitle = "Immediate response required";
     } else if (isAdminConfirmed) {
-      topColor = const Color(0xFF1565C0);
-      bottomColor = const Color(0xFF1E88E5);
+      topColor = const Color(0xFF2E7D32);
+      bottomColor = const Color(0xFF43A047);
       statusIcon = Icons.verified_user_rounded;
       title = "Confirmed";
       subtitle = "Incident officially confirmed";
     } else if (isValidated) {
-      topColor = const Color(0xFF2E7D32);
-      bottomColor = const Color(0xFF43A047);
+      topColor = const Color(0xFF1565C0);
+      bottomColor = const Color(0xFF1E88E5);
       statusIcon = Icons.verified_rounded;
       title = "Incident Validated";
       subtitle = "Dispatch completed successfully";
@@ -2741,6 +2743,16 @@ class _HomePageState extends State<HomePage> {
               label: "RESPONDING TEAM",
               value: "Team $_teamName",
             ),
+
+            if (_callerAddress.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              detailTile(
+                icon: Icons.location_on_rounded,
+                label: "ADDRESS",
+                value: _callerAddress,
+              ),
+            ],
+
             if (_currentDispatchTimestampText.isNotEmpty) ...[
               const SizedBox(height: 12),
               detailTile(
@@ -2780,7 +2792,103 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 18),
 
-            // your validate button here
+            Center(
+              child: GestureDetector(
+                onTapDown: (_) => setState(() => _validatePressed = true),
+                onTapUp: (_) async {
+                  setState(() => _validatePressed = false);
+                  await Future.delayed(const Duration(milliseconds: 70));
+                  _openValidationFormPage();
+                },
+                onTapCancel: () => setState(() => _validatePressed = false),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  curve: Curves.easeOut,
+                  width: _validatePressed ? 110 : 120,
+                  height: _validatePressed ? 110 : 120,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withOpacity(0.96),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.90),
+                      width: 1.2,
+                    ),
+                    boxShadow: _validatePressed
+                        ? [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ]
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.14),
+                              blurRadius: 14,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(7),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeOut,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF43A047), Color(0xFF2E7D32)],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.16),
+                          width: 1,
+                        ),
+                        boxShadow: _validatePressed
+                            ? [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.10),
+                                  blurRadius: 3,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ]
+                            : [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFF1B5E20,
+                                  ).withOpacity(0.22),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 4),
+                                ),
+                                BoxShadow(
+                                  color: Colors.white.withOpacity(0.10),
+                                  blurRadius: 2,
+                                  offset: const Offset(0, -1),
+                                ),
+                              ],
+                      ),
+                      child: const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text(
+                            "VALIDATE",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.9,
+                              height: 1.1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ] else if (isValidated) ...[
             detailTile(
               icon: Icons.groups_rounded,
@@ -2844,7 +2952,44 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ] else if (noActiveDispatch) ...[
-            // your no active dispatch container
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.10),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.notifications_active_outlined,
+                      color: Colors.white,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      "Dispatch assignments will appear here once an incident is assigned to your team.",
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.92),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ],
       ),
