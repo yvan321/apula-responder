@@ -645,9 +645,9 @@ class _DispatchPageState extends State<DispatchPage> {
     final bool isValidated = statusLower == "validated";
 
     final List<Color> statusColors = isConfirmed
-        ? const [Color(0xFF1565C0), Color(0xFF42A5F5)]
-        : isValidated
         ? const [Color(0xFF2E7D32), Color(0xFF66BB6A)]
+        : isValidated
+        ? const [Color(0xFF1565C0), Color(0xFF42A5F5)]
         : const [Color(0xFFD32F2F), Color(0xFFFF7043)];
 
     return GestureDetector(

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:apula_responder/screens/app/dispatch/dispatch_page.dart';
 import 'package:apula_responder/screens/app/map/map_navigation_page.dart';
@@ -94,6 +95,7 @@ class _HomePageState extends State<HomePage> {
 
   TutorialCoachMark? _tutorialCoachMark;
   bool _tutorialShownThisSession = false;
+  bool _isShowingOnboarding = false;
 
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
@@ -117,6 +119,216 @@ class _HomePageState extends State<HomePage> {
     _listenUnreadNotifications();
     _initializeLocalNotifications();
     _loadWeatherCardData();
+  }
+
+  Future<void> _maybeShowOnboardingTutorial() async {
+    if (!mounted || _tutorialShownThisSession || _isShowingOnboarding) return;
+    if (_selectedIndex != 0) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final hasSeenOnboarding = prefs.getBool('has_seen_onboarding') ?? false;
+
+    if (hasSeenOnboarding) return;
+
+    _tutorialShownThisSession = true;
+    _isShowingOnboarding = true;
+
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+
+    _showOnboardingIntro();
+  }
+
+  void _showOnboardingDoneDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 78,
+                height: 78,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF2E7D32),
+                  size: 42,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                "You're All Set",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF1C1C1E),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "You have completed the responder onboarding guide. You can now use the dashboard and response tools with confidence.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF636366),
+                  fontSize: 14,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    elevation: 0,
+                    backgroundColor: const Color(0xFFB71C1C),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text("Continue"),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showOnboardingIntro() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 78,
+                height: 78,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFEBEE),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Icon(
+                  Icons.local_fire_department_rounded,
+                  color: Color(0xFFB71C1C),
+                  size: 42,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                "Welcome to APULA Responder",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF1C1C1E),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "This quick walkthrough will guide you through the dashboard, responder tools, and key actions needed during emergency response.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF636366),
+                  fontSize: 14,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F7FA),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Guide Coverage",
+                      style: TextStyle(
+                        color: Color(0xFFB71C1C),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text("• Dashboard overview"),
+                    Text("• Responder and team details"),
+                    Text("• Availability status"),
+                    Text("• Dispatch monitoring"),
+                    Text("• Navigation shortcuts"),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () async {
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('has_seen_onboarding', true);
+                        if (!mounted) return;
+                        Navigator.pop(context);
+                        _isShowingOnboarding = false;
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFB71C1C),
+                        side: const BorderSide(color: Color(0xFFB71C1C)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text("Skip"),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        await Future.delayed(const Duration(milliseconds: 300));
+                        if (!mounted) return;
+                        _showOnboardingTutorial();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        elevation: 0,
+                        backgroundColor: const Color(0xFFB71C1C),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text("Start Guide"),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _showInitialLoading() async {
@@ -192,31 +404,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _maybeShowOnboardingTutorial() async {
-    if (!mounted || _tutorialShownThisSession) return;
-    if (_selectedIndex != 0) return;
-
-    _tutorialShownThisSession = true;
-
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
-
-    _showOnboardingTutorial();
-  }
-
   void _showOnboardingTutorial() {
+    const totalSteps = 8;
+
     final targets = <TargetFocus>[
       TargetFocus(
         identify: "weather_card",
         keyTarget: _weatherCardKey,
-        radius: 22,
         contents: [
           TargetContent(
             align: ContentAlign.bottom,
             child: _tutorialContent(
-              title: "Weather, Time, and Location",
-              description:
-                  "This card shows the current weather, temperature, date, live time, and your current location.",
+              step: 1,
+              total: totalSteps,
+              title: "Dashboard Overview",
+              description: "View weather, time, and location here.",
             ),
           ),
         ],
@@ -224,14 +426,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "responder_info",
         keyTarget: _responderInfoKey,
-        radius: 22,
         contents: [
           TargetContent(
             align: ContentAlign.bottom,
             child: _tutorialContent(
-              title: "Responder Name and Team",
-              description:
-                  "This card shows your responder name and assigned team. Tap it to open team and truck information.",
+              step: 2,
+              total: totalSteps,
+              title: "Responder Info",
+              description: "Shows your team and identity.",
             ),
           ),
         ],
@@ -239,14 +441,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "availability",
         keyTarget: _availabilityKey,
-        radius: 22,
         contents: [
           TargetContent(
             align: ContentAlign.bottom,
             child: _tutorialContent(
-              title: "Availability Status",
-              description:
-                  "This card shows whether you are available, unavailable, or dispatched. Tap it to change your status when allowed.",
+              step: 3,
+              total: totalSteps,
+              title: "Status",
+              description: "Tap to change availability.",
             ),
           ),
         ],
@@ -254,14 +456,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "dispatch_status",
         keyTarget: _dispatchStatusKey,
-        radius: 22,
         contents: [
           TargetContent(
             align: ContentAlign.top,
             child: _tutorialContent(
-              title: "Dispatch Status",
-              description:
-                  "This section shows the latest incident status, such as dispatched, validated, or confirmed, together with response details.",
+              step: 4,
+              total: totalSteps,
+              title: "Dispatch",
+              description: "Shows active emergency status.",
             ),
           ),
         ],
@@ -269,13 +471,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "nav_home",
         keyTarget: _navHomeKey,
-        radius: 16,
         contents: [
           TargetContent(
             align: ContentAlign.top,
             child: _tutorialContent(
+              step: 5,
+              total: totalSteps,
               title: "Home",
-              description: "Return to the dashboard here.",
+              description: "Return to dashboard.",
             ),
           ),
         ],
@@ -283,14 +486,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "nav_dispatch",
         keyTarget: _navDispatchKey,
-        radius: 16,
         contents: [
           TargetContent(
             align: ContentAlign.top,
             child: _tutorialContent(
-              title: "Dispatch",
-              description:
-                  "Open the dispatch page and responder activity here.",
+              step: 6,
+              total: totalSteps,
+              title: "Dispatch Page",
+              description: "View dispatch records.",
             ),
           ),
         ],
@@ -298,14 +501,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "nav_notifications",
         keyTarget: _navNotificationsKey,
-        radius: 16,
         contents: [
           TargetContent(
             align: ContentAlign.top,
             child: _tutorialContent(
+              step: 7,
+              total: totalSteps,
               title: "Notifications",
-              description:
-                  "Check your alerts, updates, and unread notices here.",
+              description: "View alerts.",
             ),
           ),
         ],
@@ -313,13 +516,14 @@ class _HomePageState extends State<HomePage> {
       TargetFocus(
         identify: "nav_settings",
         keyTarget: _navSettingsKey,
-        radius: 16,
         contents: [
           TargetContent(
             align: ContentAlign.top,
             child: _tutorialContent(
+              step: 8,
+              total: totalSteps,
               title: "Settings",
-              description: "Manage your account and app settings here.",
+              description: "Manage account.",
             ),
           ),
         ],
@@ -328,21 +532,46 @@ class _HomePageState extends State<HomePage> {
 
     _tutorialCoachMark = TutorialCoachMark(
       targets: targets,
-      colorShadow: Colors.black87,
-      opacityShadow: 0.78,
-      paddingFocus: 8,
       textSkip: "Skip",
-      hideSkip: false,
-      onFinish: () {},
+      onFinish: () async {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('has_seen_onboarding', true);
+        _isShowingOnboarding = false;
+      },
       onSkip: () {
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setBool('has_seen_onboarding', true);
+        });
+
+        _isShowingOnboarding = false;
         return true;
       },
     );
 
-    _tutorialCoachMark!.show(context: context);
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+
+      if (_weatherCardKey.currentContext == null) {
+        debugPrint("Targets not ready");
+        return;
+      }
+
+      _dashboardScrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
+        _tutorialCoachMark?.show(context: context);
+      });
+    });
   }
 
   Widget _tutorialContent({
+    required int step,
+    required int total,
     required String title,
     required String description,
   }) {
@@ -350,29 +579,25 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFFB71C1C),
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            "Step $step of $total",
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Text(
-            description,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontSize: 14,
-              height: 1.4,
-            ),
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
+          const SizedBox(height: 6),
+          Text(description),
+          const SizedBox(height: 10),
+          const Text("Tap anywhere to continue"),
         ],
       ),
     );
@@ -1788,6 +2013,11 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 16),
             Container(key: _weatherCardKey, child: _buildTimeCard()),
             const SizedBox(height: 16),
+            Container(
+              key: _dispatchStatusKey,
+              child: _buildDispatchStatusCard(),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
@@ -1805,12 +2035,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Container(
-              key: _dispatchStatusKey,
-              child: _buildDispatchStatusCard(),
-            ),
-            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -2738,32 +2962,16 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 20),
 
           if (isDispatched) ...[
-            detailTile(
-              icon: Icons.groups_rounded,
-              label: "RESPONDING TEAM",
-              value: "Team $_teamName",
-            ),
-
-            if (_callerAddress.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              detailTile(
-                icon: Icons.location_on_rounded,
-                label: "ADDRESS",
-                value: _callerAddress,
-              ),
-            ],
-
-            if (_currentDispatchTimestampText.isNotEmpty) ...[
-              const SizedBox(height: 12),
+            if (_currentDispatchTimestampText.isNotEmpty)
               detailTile(
                 icon: Icons.access_time_rounded,
                 label: "DISPATCH TIME",
                 value: _currentDispatchTimestampText,
               ),
-            ],
 
             const SizedBox(height: 22),
 
+            // 🔥 VIEW DETAILS BUTTON
             Center(
               child: SizedBox(
                 width: double.infinity,
@@ -2792,6 +3000,7 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 18),
 
+            // 🔥 ORIGINAL VALIDATE BUTTON (UNCHANGED)
             Center(
               child: GestureDetector(
                 onTapDown: (_) => setState(() => _validatePressed = true),
@@ -2890,67 +3099,19 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ] else if (isValidated) ...[
-            detailTile(
-              icon: Icons.groups_rounded,
-              label: "RESPONDING TEAM",
-              value: "Team $_teamName",
-            ),
-            if (_currentValidatedTimestampText.isNotEmpty) ...[
-              const SizedBox(height: 12),
+            if (_currentValidatedTimestampText.isNotEmpty)
               detailTile(
                 icon: Icons.verified_rounded,
                 label: "VALIDATED TIME",
                 value: _currentValidatedTimestampText,
               ),
-            ],
-            if (_currentAlertType != null &&
-                _currentAlertType!.trim().isNotEmpty) ...[
-              const SizedBox(height: 12),
-              detailTile(
-                icon: Icons.warning_amber_rounded,
-                label: "INCIDENT TYPE",
-                value: _currentAlertType!,
-              ),
-            ],
-            if (_callerAddress.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              detailTile(
-                icon: Icons.location_on_rounded,
-                label: "ADDRESS",
-                value: _callerAddress,
-              ),
-            ],
           ] else if (isAdminConfirmed) ...[
-            detailTile(
-              icon: Icons.groups_rounded,
-              label: "RESPONDING TEAM",
-              value: "Team $_teamName",
-            ),
-            if (_currentConfirmedTimestampText.isNotEmpty) ...[
-              const SizedBox(height: 12),
+            if (_currentConfirmedTimestampText.isNotEmpty)
               detailTile(
                 icon: Icons.verified_user_rounded,
                 label: "CONFIRMED TIME",
                 value: _currentConfirmedTimestampText,
               ),
-            ],
-            if (_currentAlertType != null &&
-                _currentAlertType!.trim().isNotEmpty) ...[
-              const SizedBox(height: 12),
-              detailTile(
-                icon: Icons.warning_amber_rounded,
-                label: "INCIDENT TYPE",
-                value: _currentAlertType!,
-              ),
-            ],
-            if (_callerAddress.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              detailTile(
-                icon: Icons.location_on_rounded,
-                label: "ADDRESS",
-                value: _callerAddress,
-              ),
-            ],
           ] else if (noActiveDispatch) ...[
             Container(
               width: double.infinity,
@@ -2958,36 +3119,13 @@ class _HomePageState extends State<HomePage> {
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.10),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.10),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.notifications_active_outlined,
-                      color: Colors.white,
-                      size: 21,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      "Dispatch assignments will appear here once an incident is assigned to your team.",
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.92),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                ],
+              child: Text(
+                "No active dispatch.",
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.9),
+                  fontSize: 14,
+                ),
               ),
             ),
           ],
