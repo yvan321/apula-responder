@@ -49,6 +49,7 @@ class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> _recentAlerts = [];
 
   String _responderStatus = "Available";
+  String _unavailableReason = "";
 
   final AudioPlayer _player = AudioPlayer();
   bool _hasPlayedSound = false;
@@ -924,6 +925,9 @@ class _HomePageState extends State<HomePage> {
           _vehicleCode = resolvedVehicleCode.isEmpty
               ? null
               : resolvedVehicleCode;
+          _unavailableReason = (data['unavailableReason'] ?? '')
+              .toString()
+              .trim();
         });
 
         // FIX:
@@ -946,54 +950,801 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _toggleResponderStatus() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    String newStatus;
-
-    if (_responderStatus == "Available") {
-      newStatus = "Unavailable";
-    } else if (_responderStatus == "Unavailable") {
-      newStatus = "Available";
-    } else if (_responderStatus == "Dispatched") {
+    if (_responderStatus == "Dispatched") {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Cannot change status while dispatched.")),
       );
       return;
-    } else {
-      newStatus = "Unavailable";
     }
 
-    try {
-      QuerySnapshot snap = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: user.email)
-          .limit(1)
-          .get();
+    // ── NEW: if currently Unavailable, confirm before switching to Available ──
+    if (_responderStatus == "Unavailable") {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F5E9),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.check_circle_rounded,
+                    color: Color(0xFF2E7D32),
+                    size: 38,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  "Set as Available?",
+                  style: TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  "This will mark you as ready to respond to incidents.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF636366),
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF636366),
+                          side: const BorderSide(color: Color(0xFFD1D1D6)),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          "Cancel",
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(
+                          elevation: 0,
+                          backgroundColor: const Color(0xFF2E7D32),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          "Set Available",
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
 
-      if (snap.docs.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("User doc not found.")));
-        return;
+      if (confirm != true) return;
+
+      // Apply Available and clear the reason in Firestore
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email)
+            .limit(1)
+            .get();
+
+        if (snap.docs.isEmpty) return;
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(snap.docs.first.id)
+            .update({
+              'status': 'Available',
+              'unavailableReason': FieldValue.delete(),
+            });
+
+        if (!mounted) return;
+        setState(() {
+          _responderStatus = "Available";
+          _unavailableReason = "";
+        });
+      } catch (e) {
+        debugPrint("Toggle to available error: $e");
       }
-
-      final docData = snap.docs.first.data() as Map<String, dynamic>;
-      final docId = snap.docs.first.id;
-
-      await FirebaseFirestore.instance.collection('users').doc(docId).update({
-        'status': newStatus,
-      });
-
-      if (!mounted) return;
-      setState(() {
-        _responderStatus = newStatus;
-        _userName = docData['name'] ?? _userName;
-        _teamName = docData['teamName'] ?? _teamName;
-      });
-    } catch (e) {
-      debugPrint("Status toggle error: $e");
+      return;
     }
+
+    // Default: open the full status modal (Available → Unavailable flow)
+    _showStatusChangeModal();
+  }
+
+  void _showStatusChangeModal() {
+    final List<String> unavailableReasons = [
+      'Off Duty',
+      'On Scheduled Break',
+      'Sick Leave',
+      'Emergency Leave',
+      'Training / Seminar',
+      'Administrative Duties',
+      'Shift Change in Progress',
+      'Insufficient Personnel Available',
+      'Fatigue Recovery / Mandatory Rest Period',
+      'Other (Specify)',
+    ];
+
+    String? selectedReason;
+    final TextEditingController otherController = TextEditingController();
+    bool showOtherField = false;
+    bool isLoading = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Future<void> applyStatus(String newStatus, {String? reason}) async {
+              setModalState(() => isLoading = true);
+
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) return;
+
+              try {
+                final snap = await FirebaseFirestore.instance
+                    .collection('users')
+                    .where('email', isEqualTo: user.email)
+                    .limit(1)
+                    .get();
+
+                if (snap.docs.isEmpty) return;
+
+                final docId = snap.docs.first.id;
+                final Map<String, dynamic> updateData = {'status': newStatus};
+                if (reason != null && reason.trim().isNotEmpty) {
+                  updateData['unavailableReason'] = reason.trim();
+                } else {
+                  updateData['unavailableReason'] = FieldValue.delete();
+                }
+
+                await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(docId)
+                    .update(updateData);
+
+                if (!mounted) return;
+                setState(() {
+                  _responderStatus = newStatus;
+                  _unavailableReason =
+                      (reason != null && reason.trim().isNotEmpty)
+                      ? reason.trim()
+                      : ""; // ← ADD THIS LINE
+                });
+                Navigator.pop(context);
+              } catch (e) {
+                debugPrint("Status modal apply error: $e");
+              } finally {
+                setModalState(() => isLoading = false);
+              }
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF7F7FA),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                ),
+                child: SafeArea(
+                  top: false,
+                  bottom: false,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 46,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade400,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        const Center(
+                          child: Text(
+                            "Change Availability",
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1C1C1E),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Available option
+                        InkWell(
+                          borderRadius: BorderRadius.circular(18),
+                          onTap: isLoading
+                              ? null
+                              : () => applyStatus("Available"),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF43A047), Color(0xFF69F0AE)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFF69F0AE,
+                                  ).withOpacity(0.25),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.18),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.check_circle_rounded,
+                                    color: Colors.white,
+                                    size: 24,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Available",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      SizedBox(height: 2),
+                                      Text(
+                                        "Ready to respond to incidents",
+                                        style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (_responderStatus == "Available")
+                                  const Icon(
+                                    Icons.check_rounded,
+                                    color: Colors.white,
+                                    size: 22,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        // Unavailable section
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.04),
+                                blurRadius: 8,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFEBEE),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: const Icon(
+                                      Icons.cancel_rounded,
+                                      color: Color(0xFFD32F2F),
+                                      size: 22,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text(
+                                    "Unavailable",
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1C1C1E),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              const Text(
+                                "Select reason:",
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF636366),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              ...unavailableReasons.map((reason) {
+                                final isOther = reason == 'Other (Specify)';
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(12),
+                                      onTap: isLoading
+                                          ? null
+                                          : () {
+                                              setModalState(() {
+                                                selectedReason = reason;
+                                                showOtherField = isOther;
+                                                if (!isOther) {
+                                                  otherController.clear();
+                                                }
+                                              });
+                                            },
+                                      child: Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 14,
+                                          vertical: 12,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: selectedReason == reason
+                                              ? const Color(0xFFFFEBEE)
+                                              : const Color(0xFFF7F7FA),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: selectedReason == reason
+                                                ? const Color(0xFFB71C1C)
+                                                : Colors.transparent,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color:
+                                                      selectedReason == reason
+                                                      ? const Color(0xFFB71C1C)
+                                                      : Colors.grey.shade400,
+                                                  width: 2,
+                                                ),
+                                                color: selectedReason == reason
+                                                    ? const Color(0xFFB71C1C)
+                                                    : Colors.transparent,
+                                              ),
+                                              child: selectedReason == reason
+                                                  ? const Icon(
+                                                      Icons.check,
+                                                      size: 12,
+                                                      color: Colors.white,
+                                                    )
+                                                  : null,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                reason,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight:
+                                                      selectedReason == reason
+                                                      ? FontWeight.w600
+                                                      : FontWeight.w400,
+                                                  color:
+                                                      selectedReason == reason
+                                                      ? const Color(0xFFB71C1C)
+                                                      : const Color(0xFF1C1C1E),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    if (isOther && showOtherField) ...[
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 8,
+                                          left: 4,
+                                          right: 4,
+                                        ),
+                                        child: TextField(
+                                          controller: otherController,
+                                          autofocus: true,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Color(0xFF1C1C1E),
+                                          ),
+                                          decoration: InputDecoration(
+                                            hintText: "Specify reason...",
+                                            hintStyle: const TextStyle(
+                                              color: Color(0xFF8E8E93),
+                                            ),
+                                            filled: true,
+                                            fillColor: const Color(0xFFF7F7FA),
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  horizontal: 14,
+                                                  vertical: 12,
+                                                ),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              borderSide: BorderSide.none,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                );
+                              }),
+                              const SizedBox(height: 6),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  onPressed:
+                                      (isLoading || selectedReason == null)
+                                      ? null
+                                      : () async {
+                                          String finalReason = selectedReason!;
+                                          if (selectedReason ==
+                                                  'Other (Specify)' &&
+                                              otherController.text
+                                                  .trim()
+                                                  .isNotEmpty) {
+                                            finalReason = otherController.text
+                                                .trim();
+                                          }
+
+                                          // ── Confirmation dialog ───────────────────────────────────────────
+                                          final confirmed = await showDialog<bool>(
+                                            context: context,
+                                            builder: (ctx) => Dialog(
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(24),
+                                              ),
+                                              child: Padding(
+                                                padding: const EdgeInsets.all(
+                                                  22,
+                                                ),
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Container(
+                                                      width: 68,
+                                                      height: 68,
+                                                      decoration: BoxDecoration(
+                                                        color: const Color(
+                                                          0xFFFFEBEE,
+                                                        ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              20,
+                                                            ),
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.cancel_rounded,
+                                                        color: Color(
+                                                          0xFFD32F2F,
+                                                        ),
+                                                        size: 38,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 16),
+                                                    const Text(
+                                                      "Set as Unavailable?",
+                                                      style: TextStyle(
+                                                        fontSize: 19,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Color(
+                                                          0xFF1C1C1E,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 10),
+                                                    // Show the selected reason in the dialog
+                                                    Container(
+                                                      width: double.infinity,
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 14,
+                                                            vertical: 10,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: const Color(
+                                                          0xFFF7F7FA,
+                                                        ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              14,
+                                                            ),
+                                                      ),
+                                                      child: Row(
+                                                        children: [
+                                                          const Icon(
+                                                            Icons
+                                                                .info_outline_rounded,
+                                                            size: 16,
+                                                            color: Color(
+                                                              0xFFD32F2F,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 8,
+                                                          ),
+                                                          Expanded(
+                                                            child: Text(
+                                                              finalReason,
+                                                              style: const TextStyle(
+                                                                fontSize: 13,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                                color: Color(
+                                                                  0xFF1C1C1E,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 10),
+                                                    const Text(
+                                                      "You won't be able to receive dispatches while unavailable.",
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      style: TextStyle(
+                                                        color: Color(
+                                                          0xFF636366,
+                                                        ),
+                                                        fontSize: 13,
+                                                        height: 1.5,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 22),
+                                                    Row(
+                                                      children: [
+                                                        Expanded(
+                                                          child: OutlinedButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  false,
+                                                                ),
+                                                            style: OutlinedButton.styleFrom(
+                                                              foregroundColor:
+                                                                  const Color(
+                                                                    0xFF636366,
+                                                                  ),
+                                                              side: const BorderSide(
+                                                                color: Color(
+                                                                  0xFFD1D1D6,
+                                                                ),
+                                                              ),
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    vertical:
+                                                                        13,
+                                                                  ),
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      14,
+                                                                    ),
+                                                              ),
+                                                            ),
+                                                            child: const Text(
+                                                              "Cancel",
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 12,
+                                                        ),
+                                                        Expanded(
+                                                          child: ElevatedButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                  true,
+                                                                ),
+                                                            style: ElevatedButton.styleFrom(
+                                                              elevation: 0,
+                                                              backgroundColor:
+                                                                  const Color(
+                                                                    0xFFD32F2F,
+                                                                  ),
+                                                              foregroundColor:
+                                                                  Colors.white,
+                                                              padding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    vertical:
+                                                                        13,
+                                                                  ),
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius:
+                                                                    BorderRadius.circular(
+                                                                      14,
+                                                                    ),
+                                                              ),
+                                                            ),
+                                                            child: const Text(
+                                                              "Confirm",
+                                                              style: TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+
+                                          if (confirmed != true) return;
+                                          applyStatus(
+                                            "Unavailable",
+                                            reason: finalReason,
+                                          );
+                                        },
+                                  style: ElevatedButton.styleFrom(
+                                    elevation: 0,
+                                    backgroundColor: const Color(0xFFD32F2F),
+                                    foregroundColor: Colors.white,
+                                    disabledBackgroundColor:
+                                        Colors.grey.shade300,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                  child: isLoading
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Text(
+                                          "Set Unavailable",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: isLoading
+                                ? null
+                                : () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF636366),
+                              side: const BorderSide(color: Color(0xFFD1D1D6)),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              "Cancel",
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _listenToDispatchStatus() {
@@ -2329,6 +3080,10 @@ class _HomePageState extends State<HomePage> {
       title = _responderStatus;
     }
 
+    // Build the subtitle lines
+    final bool showReason =
+        _responderStatus == "Unavailable" && _unavailableReason.isNotEmpty;
+
     return InkWell(
       borderRadius: BorderRadius.circular(26),
       onTap: _toggleResponderStatus,
@@ -2365,7 +3120,7 @@ class _HomePageState extends State<HomePage> {
             const Spacer(),
             Text(
               title,
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Colors.white,
@@ -2374,12 +3129,26 @@ class _HomePageState extends State<HomePage> {
                 height: 1.1,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
+            // ── Reason line (only when Unavailable) ──────────────────────────
+            if (showReason) ...[
+              Text(
+                _unavailableReason,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.92),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 2),
+            ],
             Text(
               "Tap to change",
               style: TextStyle(
                 color: Colors.white.withOpacity(0.88),
-                fontSize: 14,
+                fontSize: showReason ? 12 : 14,
               ),
             ),
           ],
@@ -3954,35 +4723,53 @@ class ValidationFormPage extends StatefulWidget {
 class _ValidationFormPageState extends State<ValidationFormPage> {
   final List<String> _selectedFireTypes = [];
   final List<String> _selectedResources = [];
-  final TextEditingController _sourceController = TextEditingController();
   final TextEditingController _remarksController = TextEditingController();
+  final TextEditingController _othersFireTypeController = TextEditingController();
 
-  bool _injuredOrTrapped = false;
+  String? _fireStatusUponArrival;
+  String? _fireSeverity;
   bool _skippedBecauseRadioed = false;
   bool _isSubmitting = false;
   String? _actualFireImageBase64;
 
+  static const List<String> _fireStatusOptions = [
+    'Fire Active',
+    'Fire Spreading',
+    'Fire Under Control',
+    'Fire Out',
+    'No Fire Found (False Alarm)',
+  ];
+
+  static const List<String> _fireSeverityOptions = [
+    'Low',
+    'Moderate',
+    'High',
+    'Critical',
+  ];
+
   static const List<String> _fireTypeOptions = [
-    'Residential',
-    'Electrical',
-    'Vehicular',
-    'Structural',
-    'Grass',
-    'Industrial',
-    'Other',
+    'Unknown',
+    'Residential Fire',
+    'Commercial Fire',
+    'Industrial Fire',
+    'Vehicular Fire',
+    'Grassland / Open Area Fire',
+    'Electrical Fire',
+    'Structural Fire',
+    'Trash / Waste Fire',
+    'Others',
   ];
 
   static const List<String> _resourceOptions = [
-    'Backup',
+    'Additional Fire Truck',
     'Ambulance',
     'Police',
-    'Additional Fire Truck',
   ];
 
   @override
   void dispose() {
-    _sourceController.dispose();
     _remarksController.dispose();
+    _othersFireTypeController.dispose();
     super.dispose();
   }
 
@@ -4053,11 +4840,36 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     );
   }
 
+  Widget _buildRadioItem({
+    required String label,
+    required String value,
+    required String? groupValue,
+    required ValueChanged<String?>? onChanged,
+  }) {
+    return RadioListTile<String>(
+      value: value,
+      groupValue: groupValue,
+      onChanged: onChanged,
+      activeColor: const Color(0xFFB71C1C),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      controlAffinity: ListTileControlAffinity.leading,
+      title: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          color: Colors.black,
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleSubmit() async {
     final hasMeaningfulInput =
+        _fireStatusUponArrival != null ||
+        _fireSeverity != null ||
         _selectedFireTypes.isNotEmpty ||
-        _sourceController.text.trim().isNotEmpty ||
-        _injuredOrTrapped ||
         _selectedResources.isNotEmpty ||
         _remarksController.text.trim().isNotEmpty ||
         (_actualFireImageBase64 != null &&
@@ -4079,10 +4891,20 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     });
 
     try {
+      // Combine fire status and severity for sourceOfFire
+      List<String> sourceComponents = [];
+      if (_fireStatusUponArrival != null) {
+        sourceComponents.add("Status: $_fireStatusUponArrival");
+      }
+      if (_fireSeverity != null) {
+        sourceComponents.add("Severity: $_fireSeverity");
+      }
+      final sourceOfFire = sourceComponents.join(" | ");
+
       await widget.onSubmit(
         fireTypes: _selectedFireTypes,
-        sourceOfFire: _sourceController.text,
-        injuredOrTrapped: _injuredOrTrapped,
+        sourceOfFire: sourceOfFire,
+        injuredOrTrapped: false,
         resourcesNeeded: _selectedResources,
         remarks: _remarksController.text,
         skippedBecauseRadioed: _skippedBecauseRadioed,
@@ -4169,31 +4991,86 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                         _skippedBecauseRadioed = checked ?? false;
 
                         if (_skippedBecauseRadioed) {
+                          _fireStatusUponArrival = null;
+                          _fireSeverity = null;
                           _selectedFireTypes.clear();
                           _selectedResources.clear();
-                          _sourceController.clear();
                           _remarksController.clear();
-                          _injuredOrTrapped = false;
-                          _actualFireImageBase64 = null;
+                          _othersFireTypeController.clear();
+                          // Keep _actualFireImageBase64 - photos should still be available
                         }
                       });
                     },
                   ),
                 ),
                 const SizedBox(height: 12),
-                _sectionCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sectionTitle("Type of Fire"),
-                      const SizedBox(height: 8),
-                      ..._fireTypeOptions.map(
-                        (type) => _buildCheckItem(
-                          label: type,
-                          value: _selectedFireTypes.contains(type),
-                          onChanged: _skippedBecauseRadioed
-                              ? null
-                              : (checked) {
+                if (!_skippedBecauseRadioed)
+                  _sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionTitle("Fire Status Upon Arrival"),
+                        const SizedBox(height: 8),
+                        ..._fireStatusOptions.map(
+                          (status) => _buildRadioItem(
+                            label: status,
+                            value: status,
+                            groupValue: _fireStatusUponArrival,
+                            onChanged: (value) {
+                              setState(() {
+                                _fireStatusUponArrival = value;
+                                // Clear Fire Severity and Fire Type if False Alarm is selected
+                                if (value == 'No Fire Found (False Alarm)') {
+                                  _fireSeverity = null;
+                                  _selectedFireTypes.clear();
+                                  _othersFireTypeController.clear();
+                                }
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                if (_fireStatusUponArrival != 'No Fire Found (False Alarm)' && !_skippedBecauseRadioed)
+                  _sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionTitle("Fire Severity"),
+                        const SizedBox(height: 8),
+                        ..._fireSeverityOptions.map(
+                          (severity) => _buildRadioItem(
+                            label: severity,
+                            value: severity,
+                            groupValue: _fireSeverity,
+                            onChanged: (value) {
+                              setState(() {
+                                _fireSeverity = value;
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                if (_fireStatusUponArrival != 'No Fire Found (False Alarm)' && !_skippedBecauseRadioed)
+                  _sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionTitle("Fire Type"),
+                        const SizedBox(height: 8),
+                        ..._fireTypeOptions.map(
+                          (type) => Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildCheckItem(
+                                label: type,
+                                value: _selectedFireTypes.contains(type),
+                                onChanged: (checked) {
                                   setState(() {
                                     if (checked == true) {
                                       if (!_selectedFireTypes.contains(type)) {
@@ -4204,81 +5081,62 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                                     }
                                   });
                                 },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _sectionCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sectionTitle("Source of Fire, if known"),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _sourceController,
-                        enabled: !_skippedBecauseRadioed,
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: "Ex. Kitchen, wiring, outlet, engine",
-                          filled: true,
-                          fillColor: const Color(0xFFF7F7FA),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide.none,
+                              ),
+                              if (type == 'Others' && _selectedFireTypes.contains(type))
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 32, top: 8),
+                                  child: TextField(
+                                    controller: _othersFireTypeController,
+                                    enabled: true,
+                                    style: const TextStyle(
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: "Specify other fire type",
+                                      filled: true,
+                                      fillColor: const Color(0xFFF7F7FA),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(height: 12),
-                _sectionCard(
-                  child: _buildCheckItem(
-                    label: "Injured / Trapped",
-                    value: _injuredOrTrapped,
-                    onChanged: _skippedBecauseRadioed
-                        ? null
-                        : (checked) {
-                            setState(() {
-                              _injuredOrTrapped = checked ?? false;
-                            });
-                          },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _sectionCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sectionTitle("Resources Needed"),
-                      const SizedBox(height: 8),
-                      ..._resourceOptions.map(
-                        (item) => _buildCheckItem(
-                          label: item,
-                          value: _selectedResources.contains(item),
-                          onChanged: _skippedBecauseRadioed
-                              ? null
-                              : (checked) {
-                                  setState(() {
-                                    if (checked == true) {
-                                      if (!_selectedResources.contains(item)) {
-                                        _selectedResources.add(item);
-                                      }
-                                    } else {
-                                      _selectedResources.remove(item);
-                                    }
-                                  });
-                                },
+                if (!_skippedBecauseRadioed)
+                  _sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionTitle("Resources Needed"),
+                        const SizedBox(height: 8),
+                        ..._resourceOptions.map(
+                          (item) => _buildCheckItem(
+                            label: item,
+                            value: _selectedResources.contains(item),
+                            onChanged: (checked) {
+                              setState(() {
+                                if (checked == true) {
+                                  if (!_selectedResources.contains(item)) {
+                                    _selectedResources.add(item);
+                                  }
+                                } else {
+                                  _selectedResources.remove(item);
+                                }
+                              });
+                            },
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(height: 12),
                 _sectionCard(
                   child: Column(
@@ -4320,18 +5178,16 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                         children: [
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: _skippedBecauseRadioed
-                                  ? null
-                                  : () async {
-                                      final picked = await widget
-                                          .onPickImageBase64(
-                                            ImageSource.camera,
-                                          );
-                                      if (picked == null) return;
-                                      setState(() {
-                                        _actualFireImageBase64 = picked;
-                                      });
-                                    },
+                              onPressed: () async {
+                                final picked = await widget
+                                    .onPickImageBase64(
+                                      ImageSource.camera,
+                                    );
+                                if (picked == null) return;
+                                setState(() {
+                                  _actualFireImageBase64 = picked;
+                                });
+                              },
                               icon: const Icon(Icons.camera_alt_rounded),
                               label: const Text("Camera"),
                             ),
@@ -4339,18 +5195,16 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: _skippedBecauseRadioed
-                                  ? null
-                                  : () async {
-                                      final picked = await widget
-                                          .onPickImageBase64(
-                                            ImageSource.gallery,
-                                          );
-                                      if (picked == null) return;
-                                      setState(() {
-                                        _actualFireImageBase64 = picked;
-                                      });
-                                    },
+                              onPressed: () async {
+                                final picked = await widget
+                                    .onPickImageBase64(
+                                      ImageSource.gallery,
+                                    );
+                                if (picked == null) return;
+                                setState(() {
+                                  _actualFireImageBase64 = picked;
+                                });
+                              },
                               icon: const Icon(Icons.photo_library_rounded),
                               label: const Text("Gallery"),
                             ),
@@ -4361,31 +5215,32 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                _sectionCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _sectionTitle("Remarks"),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _remarksController,
-                        enabled: !_skippedBecauseRadioed,
-                        minLines: 3,
-                        maxLines: 5,
-                        decoration: InputDecoration(
-                          hintText:
-                              "Ex. Visible flames, heavy smoke, waiting for backup",
-                          filled: true,
-                          fillColor: const Color(0xFFF7F7FA),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide.none,
+                if (!_skippedBecauseRadioed)
+                  _sectionCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sectionTitle("Remarks"),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _remarksController,
+                          enabled: true,
+                          minLines: 3,
+                          maxLines: 5,
+                          decoration: InputDecoration(
+                            hintText:
+                                "Ex. Visible flames, heavy smoke, waiting for backup",
+                            filled: true,
+                            fillColor: const Color(0xFFF7F7FA),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide.none,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(height: 18),
                 SizedBox(
                   width: double.infinity,
