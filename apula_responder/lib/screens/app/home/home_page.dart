@@ -1461,9 +1461,16 @@ class _HomePageState extends State<HomePage> {
                                 width: double.infinity,
                                 child: ElevatedButton(
                                   onPressed:
-                                      (isLoading || selectedReason == null)
+                                      (isLoading ||
+                                          selectedReason == null ||
+                                          (selectedReason ==
+                                                  'Other (Specify)' &&
+                                              otherController.text
+                                                  .trim()
+                                                  .isEmpty))
                                       ? null
                                       : () async {
+                                          // ── Build finalReason first ──
                                           String finalReason = selectedReason!;
                                           if (selectedReason ==
                                                   'Other (Specify)' &&
@@ -1474,7 +1481,7 @@ class _HomePageState extends State<HomePage> {
                                                 .trim();
                                           }
 
-                                          // ── Confirmation dialog ───────────────────────────────────────────
+                                          // ── Confirmation dialog ──────────────────────────────────────────
                                           final confirmed = await showDialog<bool>(
                                             context: context,
                                             builder: (ctx) => Dialog(
@@ -1523,7 +1530,6 @@ class _HomePageState extends State<HomePage> {
                                                       ),
                                                     ),
                                                     const SizedBox(height: 10),
-                                                    // Show the selected reason in the dialog
                                                     Container(
                                                       width: double.infinity,
                                                       padding:
@@ -3187,11 +3193,12 @@ class _HomePageState extends State<HomePage> {
     required String dispatchId,
     required String alertId,
     required List<String> fireTypes,
-    required String sourceOfFire,
     required bool injuredOrTrapped,
     required List<String> resourcesNeeded,
     required String remarks,
     required bool skippedBecauseRadioed,
+    String? fireStatus,
+    String? fireSeverity,
     String? actualFireImageBase64,
   }) async {
     final currentUser = await _getCurrentUserData();
@@ -3202,11 +3209,6 @@ class _HomePageState extends State<HomePage> {
     final userId = (currentUser['docId'] ?? '').toString();
 
     final report = <String, dynamic>{
-      'fireTypes': fireTypes,
-      'sourceOfFire': sourceOfFire.trim(),
-      'injuredOrTrapped': injuredOrTrapped,
-      'resourcesNeeded': resourcesNeeded,
-      'remarks': remarks.trim(),
       'skippedBecauseRadioed': skippedBecauseRadioed,
       'validatedBy': userName,
       'validatedByEmail': userEmail,
@@ -3214,9 +3216,31 @@ class _HomePageState extends State<HomePage> {
       'submittedAt': FieldValue.serverTimestamp(),
     };
 
-    if (actualFireImageBase64 != null &&
-        actualFireImageBase64.trim().isNotEmpty) {
-      report['actualFireImageBase64'] = actualFireImageBase64.trim();
+    if (skippedBecauseRadioed) {
+      // Admin fills these later
+      report['fireStatus'] = '';
+      report['fireSeverity'] = '';
+      report['fireTypes'] = [];
+      report['resourcesNeeded'] = [];
+      report['remarks'] = '';
+      report['sourceOfFire'] = '';
+      report['injuredOrTrapped'] = false;
+      if (actualFireImageBase64 != null &&
+          actualFireImageBase64.trim().isNotEmpty) {
+        report['actualFireImageBase64'] = actualFireImageBase64.trim();
+      }
+    } else {
+      report['fireStatus'] = fireStatus ?? '';
+      report['fireSeverity'] = fireSeverity ?? '';
+      report['fireTypes'] = fireTypes;
+      report['resourcesNeeded'] = resourcesNeeded;
+      report['remarks'] = remarks.trim();
+      report['sourceOfFire'] = ''; // always blank — admin fills if needed
+      report['injuredOrTrapped'] = injuredOrTrapped;
+      if (actualFireImageBase64 != null &&
+          actualFireImageBase64.trim().isNotEmpty) {
+        report['actualFireImageBase64'] = actualFireImageBase64.trim();
+      }
     }
 
     await FirebaseFirestore.instance
@@ -3245,22 +3269,24 @@ class _HomePageState extends State<HomePage> {
           onSubmit:
               ({
                 required List<String> fireTypes,
-                required String sourceOfFire,
                 required bool injuredOrTrapped,
                 required List<String> resourcesNeeded,
                 required String remarks,
                 required bool skippedBecauseRadioed,
+                String? fireStatus,
+                String? fireSeverity,
                 String? actualFireImageBase64,
               }) async {
                 await _saveValidationReport(
                   dispatchId: _currentDispatchId!,
                   alertId: _currentAlertId!,
                   fireTypes: fireTypes,
-                  sourceOfFire: sourceOfFire,
                   injuredOrTrapped: injuredOrTrapped,
                   resourcesNeeded: resourcesNeeded,
                   remarks: remarks,
                   skippedBecauseRadioed: skippedBecauseRadioed,
+                  fireStatus: fireStatus,
+                  fireSeverity: fireSeverity,
                   actualFireImageBase64: actualFireImageBase64,
                 );
               },
@@ -4701,11 +4727,12 @@ class ValidationFormPage extends StatefulWidget {
   final Future<String?> Function(ImageSource source) onPickImageBase64;
   final Future<void> Function({
     required List<String> fireTypes,
-    required String sourceOfFire,
     required bool injuredOrTrapped,
     required List<String> resourcesNeeded,
     required String remarks,
     required bool skippedBecauseRadioed,
+    String? fireStatus,
+    String? fireSeverity,
     String? actualFireImageBase64,
   })
   onSubmit;
@@ -4724,7 +4751,8 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
   final List<String> _selectedFireTypes = [];
   final List<String> _selectedResources = [];
   final TextEditingController _remarksController = TextEditingController();
-  final TextEditingController _othersFireTypeController = TextEditingController();
+  final TextEditingController _othersFireTypeController =
+      TextEditingController();
 
   String? _fireStatusUponArrival;
   String? _fireSeverity;
@@ -4760,11 +4788,8 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     'Others',
   ];
 
-  static const List<String> _resourceOptions = [
-    'Additional Fire Truck',
-    'Ambulance',
-    'Police',
-  ];
+  bool get _isFalseAlarm =>
+      _fireStatusUponArrival == 'No Fire Found (False Alarm)';
 
   @override
   void dispose() {
@@ -4772,6 +4797,8 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     _othersFireTypeController.dispose();
     super.dispose();
   }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
 
   Widget _sectionCard({required Widget child}) {
     return Container(
@@ -4811,24 +4838,18 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     return CheckboxListTile(
       value: value,
       onChanged: onChanged,
-
       activeColor: const Color(0xFFB71C1C),
-
       fillColor: MaterialStateProperty.resolveWith((states) {
         if (states.contains(MaterialState.selected)) {
           return const Color(0xFFB71C1C);
         }
         return Colors.white;
       }),
-
       side: const BorderSide(color: Colors.grey),
-
       checkColor: Colors.white,
-
       contentPadding: EdgeInsets.zero,
       dense: true,
       controlAffinity: ListTileControlAffinity.leading,
-
       title: Text(
         label,
         style: const TextStyle(
@@ -4865,49 +4886,116 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     );
   }
 
-  Future<void> _handleSubmit() async {
-    final hasMeaningfulInput =
-        _fireStatusUponArrival != null ||
-        _fireSeverity != null ||
-        _selectedFireTypes.isNotEmpty ||
-        _selectedResources.isNotEmpty ||
-        _remarksController.text.trim().isNotEmpty ||
-        (_actualFireImageBase64 != null &&
-            _actualFireImageBase64!.trim().isNotEmpty);
+  // ── Submit ────────────────────────────────────────────────────────────────
 
-    if (!_skippedBecauseRadioed && !hasMeaningfulInput) {
+  Future<void> _handleSubmit() async {
+    // ── Already radioed: skip all validation, submit blanks ───────────────
+    if (_skippedBecauseRadioed) {
+      setState(() => _isSubmitting = true);
+      try {
+        await widget.onSubmit(
+          fireTypes: [],
+          injuredOrTrapped: false,
+          resourcesNeeded: [],
+          remarks: '',
+          skippedBecauseRadioed: true,
+          fireStatus: null,
+          fireSeverity: null,
+          actualFireImageBase64: _actualFireImageBase64,
+        );
+        if (!mounted) return;
+        Navigator.pop(context, true);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Failed to save: $e")));
+      } finally {
+        if (mounted) setState(() => _isSubmitting = false);
+      }
+      return;
+    }
+
+    // ── Not radioed: validate required fields ─────────────────────────────
+
+    if (_fireStatusUponArrival == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            "Please fill in at least one validation detail or choose skip.",
-          ),
+          content: Text("Please select the fire status upon arrival."),
         ),
       );
       return;
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
+    if (!_isFalseAlarm) {
+      // Real fire validations
+      if (_fireSeverity == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please select fire severity.")),
+        );
+        return;
+      }
+      if (_selectedFireTypes.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Please select at least one fire type."),
+          ),
+        );
+        return;
+      }
+      if (_selectedFireTypes.contains('Others') &&
+          _othersFireTypeController.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please specify the other fire type.")),
+        );
+        return;
+      }
+      if (_selectedResources.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please select resources needed.")),
+        );
+        return;
+      }
+    } else {
+      // False alarm: only resources required
+      if (_selectedResources.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please select resources needed.")),
+        );
+        return;
+      }
+    }
+
+    // Remarks always required when not radioed
+    if (_remarksController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Remarks is required.")));
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
 
     try {
-      // Combine fire status and severity for sourceOfFire
-      List<String> sourceComponents = [];
-      if (_fireStatusUponArrival != null) {
-        sourceComponents.add("Status: $_fireStatusUponArrival");
-      }
-      if (_fireSeverity != null) {
-        sourceComponents.add("Severity: $_fireSeverity");
-      }
-      final sourceOfFire = sourceComponents.join(" | ");
+      // ── Build fire types ──────────────────────────────────────────────
+      final List<String> finalFireTypes = _isFalseAlarm
+          ? ['No Fire Found (False Alarm)']
+          : _selectedFireTypes.map((type) {
+              if (type == 'Others') {
+                final specified = _othersFireTypeController.text.trim();
+                return specified.isNotEmpty ? specified : 'Others';
+              }
+              return type;
+            }).toList();
 
       await widget.onSubmit(
-        fireTypes: _selectedFireTypes,
-        sourceOfFire: sourceOfFire,
+        fireTypes: finalFireTypes,
         injuredOrTrapped: false,
-        resourcesNeeded: _selectedResources,
-        remarks: _remarksController.text,
-        skippedBecauseRadioed: _skippedBecauseRadioed,
+        resourcesNeeded: List.from(_selectedResources),
+        remarks: _remarksController.text.trim(),
+        skippedBecauseRadioed: false,
+        fireStatus: _fireStatusUponArrival,
+        fireSeverity: _isFalseAlarm ? null : _fireSeverity,
         actualFireImageBase64: _actualFireImageBase64,
       );
 
@@ -4919,11 +5007,7 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
         SnackBar(content: Text("Failed to save validation form: $e")),
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -4932,21 +5016,15 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
     return Theme(
       data: ThemeData.light().copyWith(
         scaffoldBackgroundColor: const Color(0xFFF7F7FA),
-
-        // ✅ force all text to black
         textTheme: ThemeData.light().textTheme.apply(
           bodyColor: Colors.black,
           displayColor: Colors.black,
         ),
-
-        // ✅ input field styling
-        inputDecorationTheme: InputDecorationTheme(
+        inputDecorationTheme: const InputDecorationTheme(
           filled: true,
-          fillColor: const Color(0xFFF7F7FA),
-          hintStyle: const TextStyle(color: Colors.grey),
+          fillColor: Color(0xFFF7F7FA),
+          hintStyle: TextStyle(color: Colors.grey),
         ),
-
-        // ✅ checkbox / switch colors
         checkboxTheme: CheckboxThemeData(
           fillColor: MaterialStateProperty.all(const Color(0xFFB71C1C)),
         ),
@@ -4982,6 +5060,7 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ── Already Radioed toggle ──────────────────────────────
                 _sectionCard(
                   child: _buildCheckItem(
                     label: "Skip detailed form, already radioed",
@@ -4989,7 +5068,6 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                     onChanged: (checked) {
                       setState(() {
                         _skippedBecauseRadioed = checked ?? false;
-
                         if (_skippedBecauseRadioed) {
                           _fireStatusUponArrival = null;
                           _fireSeverity = null;
@@ -4997,19 +5075,50 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                           _selectedResources.clear();
                           _remarksController.clear();
                           _othersFireTypeController.clear();
-                          // Keep _actualFireImageBase64 - photos should still be available
                         }
                       });
                     },
                   ),
                 ),
-                const SizedBox(height: 12),
-                if (!_skippedBecauseRadioed)
+
+                // ── Hint when radioed ───────────────────────────────────
+                if (_skippedBecauseRadioed) ...[
+                  const SizedBox(height: 12),
+                  _sectionCard(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: Color(0xFFB71C1C),
+                          size: 20,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            "All incident details will be filled by the admin "
+                            "based on your radio report. You may optionally "
+                            "attach a photo below.",
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF636366),
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                // ── Fire Status (hidden when radioed) ───────────────────
+                if (!_skippedBecauseRadioed) ...[
+                  const SizedBox(height: 12),
                   _sectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _sectionTitle("Fire Status Upon Arrival"),
+                        _sectionTitle("Fire Status Upon Arrival *"),
                         const SizedBox(height: 8),
                         ..._fireStatusOptions.map(
                           (status) => _buildRadioItem(
@@ -5019,8 +5128,8 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                             onChanged: (value) {
                               setState(() {
                                 _fireStatusUponArrival = value;
-                                // Clear Fire Severity and Fire Type if False Alarm is selected
-                                if (value == 'No Fire Found (False Alarm)') {
+                                if (_isFalseAlarm) {
+                                  // reset fire-only fields
                                   _fireSeverity = null;
                                   _selectedFireTypes.clear();
                                   _othersFireTypeController.clear();
@@ -5032,39 +5141,53 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                       ],
                     ),
                   ),
-                const SizedBox(height: 12),
-                if (_fireStatusUponArrival != 'No Fire Found (False Alarm)' && !_skippedBecauseRadioed)
+                ],
+
+                // ── Fire Severity (real fire only) ──────────────────────
+                if (!_skippedBecauseRadioed &&
+                    _fireStatusUponArrival != null &&
+                    !_isFalseAlarm) ...[
+                  const SizedBox(height: 12),
                   _sectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _sectionTitle("Fire Severity"),
+                        _sectionTitle("Fire Severity *"),
                         const SizedBox(height: 8),
                         ..._fireSeverityOptions.map(
                           (severity) => _buildRadioItem(
                             label: severity,
                             value: severity,
                             groupValue: _fireSeverity,
-                            onChanged: (value) {
-                              setState(() {
-                                _fireSeverity = value;
-                              });
-                            },
+                            onChanged: (value) =>
+                                setState(() => _fireSeverity = value),
                           ),
                         ),
                       ],
                     ),
                   ),
-                const SizedBox(height: 12),
-                if (_fireStatusUponArrival != 'No Fire Found (False Alarm)' && !_skippedBecauseRadioed)
+                ],
+
+                // ── Fire Type (real fire only) ──────────────────────────
+                if (!_skippedBecauseRadioed &&
+                    _fireStatusUponArrival != null &&
+                    !_isFalseAlarm) ...[
+                  const SizedBox(height: 12),
                   _sectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _sectionTitle("Fire Type"),
+                        _sectionTitle("Fire Type *"),
                         const SizedBox(height: 8),
-                        ..._fireTypeOptions.map(
-                          (type) => Column(
+                        ..._fireTypeOptions.map((type) {
+                          final isUnknownSelected = _selectedFireTypes.contains(
+                            'Unknown',
+                          );
+                          // hide all non-Unknown when Unknown is selected
+                          if (type != 'Unknown' && isUnknownSelected) {
+                            return const SizedBox.shrink();
+                          }
+                          return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _buildCheckItem(
@@ -5073,24 +5196,40 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                                 onChanged: (checked) {
                                   setState(() {
                                     if (checked == true) {
-                                      if (!_selectedFireTypes.contains(type)) {
-                                        _selectedFireTypes.add(type);
+                                      if (type == 'Unknown') {
+                                        _selectedFireTypes.clear();
+                                        _selectedFireTypes.add('Unknown');
+                                        _othersFireTypeController.clear();
+                                      } else {
+                                        _selectedFireTypes.remove('Unknown');
+                                        if (!_selectedFireTypes.contains(
+                                          type,
+                                        )) {
+                                          _selectedFireTypes.add(type);
+                                        }
                                       }
                                     } else {
                                       _selectedFireTypes.remove(type);
+                                      if (type == 'Others') {
+                                        _othersFireTypeController.clear();
+                                      }
                                     }
                                   });
                                 },
                               ),
-                              if (type == 'Others' && _selectedFireTypes.contains(type))
+                              if (type == 'Others' &&
+                                  _selectedFireTypes.contains('Others'))
                                 Padding(
-                                  padding: const EdgeInsets.only(left: 32, top: 8),
+                                  padding: const EdgeInsets.only(
+                                    left: 32,
+                                    top: 4,
+                                  ),
                                   child: TextField(
                                     controller: _othersFireTypeController,
-                                    enabled: true,
+                                    autofocus: true,
                                     style: const TextStyle(
+                                      fontSize: 14,
                                       color: Colors.black,
-                                      fontWeight: FontWeight.w500,
                                     ),
                                     decoration: InputDecoration(
                                       hintText: "Specify other fire type",
@@ -5104,45 +5243,101 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                                   ),
                                 ),
                             ],
-                          ),
-                        ),
+                          );
+                        }),
                       ],
                     ),
                   ),
-                const SizedBox(height: 12),
-                if (!_skippedBecauseRadioed)
+                ],
+
+                // ── Resources Needed (shown for any status, not radioed) ─
+                if (!_skippedBecauseRadioed &&
+                    _fireStatusUponArrival != null) ...[
+                  const SizedBox(height: 12),
                   _sectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _sectionTitle("Resources Needed"),
+                        _sectionTitle("Resources Needed *"),
                         const SizedBox(height: 8),
-                        ..._resourceOptions.map(
-                          (item) => _buildCheckItem(
-                            label: item,
-                            value: _selectedResources.contains(item),
+                        _buildCheckItem(
+                          label: 'No Additional Resources Needed',
+                          value: _selectedResources.contains(
+                            'No Additional Resources Needed',
+                          ),
+                          onChanged: (checked) {
+                            setState(() {
+                              if (checked == true) {
+                                _selectedResources.clear();
+                                _selectedResources.add(
+                                  'No Additional Resources Needed',
+                                );
+                              } else {
+                                _selectedResources.remove(
+                                  'No Additional Resources Needed',
+                                );
+                              }
+                            });
+                          },
+                        ),
+                        if (!_selectedResources.contains(
+                          'No Additional Resources Needed',
+                        )) ...[
+                          _buildCheckItem(
+                            label: 'Additional Fire Truck',
+                            value: _selectedResources.contains(
+                              'Additional Fire Truck',
+                            ),
                             onChanged: (checked) {
                               setState(() {
-                                if (checked == true) {
-                                  if (!_selectedResources.contains(item)) {
-                                    _selectedResources.add(item);
-                                  }
-                                } else {
-                                  _selectedResources.remove(item);
-                                }
+                                if (checked == true)
+                                  _selectedResources.add(
+                                    'Additional Fire Truck',
+                                  );
+                                else
+                                  _selectedResources.remove(
+                                    'Additional Fire Truck',
+                                  );
                               });
                             },
                           ),
-                        ),
+                          _buildCheckItem(
+                            label: 'Ambulance',
+                            value: _selectedResources.contains('Ambulance'),
+                            onChanged: (checked) {
+                              setState(() {
+                                if (checked == true)
+                                  _selectedResources.add('Ambulance');
+                                else
+                                  _selectedResources.remove('Ambulance');
+                              });
+                            },
+                          ),
+                          _buildCheckItem(
+                            label: 'Police',
+                            value: _selectedResources.contains('Police'),
+                            onChanged: (checked) {
+                              setState(() {
+                                if (checked == true)
+                                  _selectedResources.add('Police');
+                                else
+                                  _selectedResources.remove('Police');
+                              });
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ),
+                ],
+
+                // ── Actual Fire Photo (always shown, always optional) ────
                 const SizedBox(height: 12),
                 _sectionCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _sectionTitle("Actual Fire Photo"),
+                      _sectionTitle("Actual Fire Photo (Optional)"),
                       const SizedBox(height: 10),
                       if (_actualFireImageBase64 != null)
                         ClipRRect(
@@ -5156,7 +5351,7 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                         )
                       else
                         Container(
-                          height: 150,
+                          height: 130,
                           width: double.infinity,
                           decoration: BoxDecoration(
                             color: const Color(0xFFF2F2F7),
@@ -5165,7 +5360,7 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                           ),
                           child: const Center(
                             child: Text(
-                              "No validation photo selected",
+                              "No photo selected",
                               style: TextStyle(
                                 color: Color(0xFF636366),
                                 fontWeight: FontWeight.w500,
@@ -5179,14 +5374,11 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () async {
-                                final picked = await widget
-                                    .onPickImageBase64(
-                                      ImageSource.camera,
-                                    );
+                                final picked = await widget.onPickImageBase64(
+                                  ImageSource.camera,
+                                );
                                 if (picked == null) return;
-                                setState(() {
-                                  _actualFireImageBase64 = picked;
-                                });
+                                setState(() => _actualFireImageBase64 = picked);
                               },
                               icon: const Icon(Icons.camera_alt_rounded),
                               label: const Text("Camera"),
@@ -5196,14 +5388,11 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () async {
-                                final picked = await widget
-                                    .onPickImageBase64(
-                                      ImageSource.gallery,
-                                    );
+                                final picked = await widget.onPickImageBase64(
+                                  ImageSource.gallery,
+                                );
                                 if (picked == null) return;
-                                setState(() {
-                                  _actualFireImageBase64 = picked;
-                                });
+                                setState(() => _actualFireImageBase64 = picked);
                               },
                               icon: const Icon(Icons.photo_library_rounded),
                               label: const Text("Gallery"),
@@ -5214,19 +5403,24 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                if (!_skippedBecauseRadioed)
+
+                // ── Remarks (hidden when radioed) ───────────────────────
+                if (!_skippedBecauseRadioed) ...[
+                  const SizedBox(height: 12),
                   _sectionCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _sectionTitle("Remarks"),
+                        _sectionTitle("Remarks *"),
                         const SizedBox(height: 10),
                         TextField(
                           controller: _remarksController,
-                          enabled: true,
                           minLines: 3,
                           maxLines: 5,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.black,
+                          ),
                           decoration: InputDecoration(
                             hintText:
                                 "Ex. Visible flames, heavy smoke, waiting for backup",
@@ -5241,7 +5435,11 @@ class _ValidationFormPageState extends State<ValidationFormPage> {
                       ],
                     ),
                   ),
+                ],
+
                 const SizedBox(height: 18),
+
+                // ── Submit ──────────────────────────────────────────────
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
